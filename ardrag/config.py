@@ -60,5 +60,12 @@ ALLOWED_UPLOAD_EXTENSIONS = {
 # etc.) shouldn't be able to balloon memory/CPU usage during extraction+embedding.
 MAX_UPLOAD_SIZE_BYTES = int(os.getenv("MAX_UPLOAD_SIZE_MB", "50")) * 1024 * 1024
 
+# Public HTTPS URL the MCP server is reachable at (e.g. through the Cloudflare Tunnel hostname).
+# Required for OAuth: the issuer/base URL advertised in /.well-known/oauth-authorization-server
+# must be the real public address, not the internal 0.0.0.0:8001 bind address. Only needed if
+# MCP_OAUTH_ENABLED is set — plain SSE clients (e.g. Claude Code) don't need this at all.
+MCP_PUBLIC_URL = os.getenv("MCP_PUBLIC_URL", "")
+MCP_OAUTH_ENABLED = os.getenv("MCP_OAUTH_ENABLED", "false").lower() in ("1", "true", "yes")
+
 Path(UPLOAD_DIR).mkdir(parents=True, exist_ok=True)
 Path(SQLITE_PATH).parent.mkdir(parents=True, exist_ok=True)

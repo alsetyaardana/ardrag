@@ -55,6 +55,51 @@ class DeepseekUsageLog(SQLModel, table=True):
     total_tokens: int = 0
 
 
+# ---- OAuth 2.1 authorization server storage (for the MCP server's Claude.ai Custom Connector
+# support). Persisted in SQLite rather than in-memory so registered clients/tokens survive
+# container redeploys — losing them would silently break every previously-connected client. ----
+
+
+class OAuthClient(SQLModel, table=True):
+    client_id: str = Field(primary_key=True)
+    client_secret: Optional[str] = None
+    redirect_uris_json: str = "[]"
+    client_name: Optional[str] = None
+    grant_types_json: str = "[]"
+    response_types_json: str = "[]"
+    token_endpoint_auth_method: Optional[str] = None
+    scope: Optional[str] = None
+    client_id_issued_at: Optional[int] = None
+
+
+class OAuthAuthCode(SQLModel, table=True):
+    code: str = Field(primary_key=True)
+    client_id: str
+    redirect_uri: str
+    redirect_uri_provided_explicitly: bool = True
+    code_challenge: str
+    scopes_json: str = "[]"
+    expires_at: float
+    subject: str
+
+
+class OAuthAccessToken(SQLModel, table=True):
+    token: str = Field(primary_key=True)
+    client_id: str
+    scopes_json: str = "[]"
+    expires_at: Optional[float] = None
+    subject: str
+
+
+class OAuthRefreshToken(SQLModel, table=True):
+    token: str = Field(primary_key=True)
+    client_id: str
+    scopes_json: str = "[]"
+    expires_at: Optional[float] = None
+    subject: str
+    access_token: Optional[str] = None
+
+
 def _migrate_document_columns() -> None:
     with _engine.connect() as conn:
         cols = {row[1] for row in conn.execute(text("PRAGMA table_info(document)"))}
@@ -307,3 +352,180 @@ def get_deepseek_usage_summary(hours: int = 24) -> dict:
         "window_hours": hours,
         "hourly_tokens": _hourly_buckets([(r.called_at, r.total_tokens) for r in recent], hours),
     }
+
+
+# ---- OAuth storage functions ----
+
+
+def oauth_get_client(client_id: str) -> Optional[dict]:
+    with Session(_engine) as session:
+        c = session.get(OAuthClient, client_id)
+        if not c:
+            return None
+        return {
+            "client_id": c.client_id,
+            "client_secret": c.client_secret,
+            "redirect_uris": json.loads(c.redirect_uris_json),
+            "client_name": c.client_name,
+            "grant_types": json.loads(c.grant_types_json),
+            "response_types": json.loads(c.response_types_json),
+            "token_endpoint_auth_method": c.token_endpoint_auth_method,
+            "scope": c.scope,
+            "client_id_issued_at": c.client_id_issued_at,
+        }
+
+
+def oauth_save_client(
+    client_id: str,
+    client_secret: Optional[str],
+    redirect_uris: list[str],
+    client_name: Optional[str],
+    grant_types: list[str],
+    response_types: list[str],
+    token_endpoint_auth_method: Optional[str],
+    scope: Optional[str],
+    client_id_issued_at: Optional[int],
+) -> None:
+    with Session(_engine) as session:
+        existing = session.get(OAuthClient, client_id)
+        row = existing or OAuthClient(client_id=client_id)
+        row.client_secret = client_secret
+        row.redirect_uris_json = json.dumps(redirect_uris)
+        row.client_name = client_name
+        row.grant_types_json = json.dumps(grant_types)
+        row.response_types_json = json.dumps(response_types)
+        row.token_endpoint_auth_method = token_endpoint_auth_method
+        row.scope = scope
+        row.client_id_issued_at = client_id_issued_at
+        session.add(row)
+        session.commit()
+
+
+def oauth_save_auth_code(
+    code: str,
+    client_id: str,
+    redirect_uri: str,
+    redirect_uri_provided_explicitly: bool,
+    code_challenge: str,
+    scopes: list[str],
+    expires_at: float,
+    subject: str,
+) -> None:
+    with Session(_engine) as session:
+        session.add(
+            OAuthAuthCode(
+                code=code,
+                client_id=client_id,
+                redirect_uri=redirect_uri,
+                redirect_uri_provided_explicitly=redirect_uri_provided_explicitly,
+                code_challenge=code_challenge,
+                scopes_json=json.dumps(scopes),
+                expires_at=expires_at,
+                subject=subject,
+            )
+        )
+        session.commit()
+
+
+def oauth_load_auth_code(code: str) -> Optional[dict]:
+    with Session(_engine) as session:
+        row = session.get(OAuthAuthCode, code)
+        if not row:
+            return None
+        return {
+            "code": row.code,
+            "client_id": row.client_id,
+            "redirect_uri": row.redirect_uri,
+            "redirect_uri_provided_explicitly": row.redirect_uri_provided_explicitly,
+            "code_challenge": row.code_challenge,
+            "scopes": json.loads(row.scopes_json),
+            "expires_at": row.expires_at,
+            "subject": row.subject,
+        }
+
+
+def oauth_delete_auth_code(code: str) -> None:
+    with Session(_engine) as session:
+        row = session.get(OAuthAuthCode, code)
+        if row:
+            session.delete(row)
+            session.commit()
+
+
+def oauth_save_access_token(
+    token: str, client_id: str, scopes: list[str], expires_at: Optional[float], subject: str
+) -> None:
+    with Session(_engine) as session:
+        session.add(
+            OAuthAccessToken(
+                token=token, client_id=client_id, scopes_json=json.dumps(scopes), expires_at=expires_at, subject=subject
+            )
+        )
+        session.commit()
+
+
+def oauth_load_access_token(token: str) -> Optional[dict]:
+    with Session(_engine) as session:
+        row = session.get(OAuthAccessToken, token)
+        if not row:
+            return None
+        return {
+            "token": row.token,
+            "client_id": row.client_id,
+            "scopes": json.loads(row.scopes_json),
+            "expires_at": row.expires_at,
+            "subject": row.subject,
+        }
+
+
+def oauth_delete_access_token(token: str) -> None:
+    with Session(_engine) as session:
+        row = session.get(OAuthAccessToken, token)
+        if row:
+            session.delete(row)
+            session.commit()
+
+
+def oauth_save_refresh_token(
+    token: str,
+    client_id: str,
+    scopes: list[str],
+    expires_at: Optional[float],
+    subject: str,
+    access_token: Optional[str],
+) -> None:
+    with Session(_engine) as session:
+        session.add(
+            OAuthRefreshToken(
+                token=token,
+                client_id=client_id,
+                scopes_json=json.dumps(scopes),
+                expires_at=expires_at,
+                subject=subject,
+                access_token=access_token,
+            )
+        )
+        session.commit()
+
+
+def oauth_load_refresh_token(token: str) -> Optional[dict]:
+    with Session(_engine) as session:
+        row = session.get(OAuthRefreshToken, token)
+        if not row:
+            return None
+        return {
+            "token": row.token,
+            "client_id": row.client_id,
+            "scopes": json.loads(row.scopes_json),
+            "expires_at": row.expires_at,
+            "subject": row.subject,
+            "access_token": row.access_token,
+        }
+
+
+def oauth_delete_refresh_token(token: str) -> None:
+    with Session(_engine) as session:
+        row = session.get(OAuthRefreshToken, token)
+        if row:
+            session.delete(row)
+            session.commit()

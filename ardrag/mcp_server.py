@@ -1,17 +1,144 @@
 from pathlib import Path
 
 from fastmcp import FastMCP
+from starlette.requests import Request
+from starlette.responses import HTMLResponse, RedirectResponse
 
 from ardrag import core, db
-from ardrag.config import DEFAULT_TOP_K, MCP_HOST, MCP_PORT, UPLOAD_DIR
+from ardrag.auth import verify_credentials
+from ardrag.config import DEFAULT_TOP_K, MCP_HOST, MCP_OAUTH_ENABLED, MCP_PORT, MCP_PUBLIC_URL, UPLOAD_DIR
 from ardrag.extract import extract_text
 
 db.init_db()
 core.ensure_collection()
 
-mcp = FastMCP("Ardrag")
-
 DEFAULT_DOCUMENT_MAX_CHARS = 20000
+
+_auth_provider = None
+if MCP_OAUTH_ENABLED:
+    if not MCP_PUBLIC_URL:
+        raise RuntimeError("MCP_OAUTH_ENABLED is set but MCP_PUBLIC_URL is empty — set it to the public HTTPS URL of this MCP server.")
+    from mcp.server.auth.settings import ClientRegistrationOptions
+
+    from ardrag.oauth_provider import ArdragOAuthProvider
+
+    _auth_provider = ArdragOAuthProvider(
+        base_url=MCP_PUBLIC_URL,
+        client_registration_options=ClientRegistrationOptions(enabled=True),
+    )
+
+mcp = FastMCP("Ardrag", auth=_auth_provider)
+
+
+_LOGIN_PAGE = """<!doctype html>
+<html lang="en"><head><meta charset="utf-8" />
+<title>ArdRAG — Authorize</title>
+<style>
+  :root {{ color-scheme: light dark; }}
+  body {{
+    font-family: -apple-system, "Segoe UI", system-ui, sans-serif; margin: 0; min-height: 100vh;
+    display: flex; align-items: center; justify-content: center;
+    background: #f4f5fb; color: #1a1a1a;
+  }}
+  @media (prefers-color-scheme: dark) {{
+    body {{ background: #0f0f12; color: #e8e8e8; }}
+    .card {{ background: #1c1c1f !important; border-color: #2a2a2e !important; }}
+    input {{ background: #26262a !important; color: #e8e8e8 !important; border-color: #3a3a3e !important; }}
+  }}
+  .card {{
+    width: 360px; background: #ffffff; border: 1px solid #ececf4; border-radius: 16px;
+    padding: 32px; box-shadow: 0 10px 30px rgba(0,0,0,0.08);
+  }}
+  h1 {{ font-size: 1.2rem; margin: 0 0 4px; text-align: center; }}
+  .subtitle {{ font-size: 0.82rem; color: #888; margin: 0 0 20px; text-align: center; }}
+  label {{ display: block; font-size: 0.82rem; margin-bottom: 6px; margin-top: 14px; }}
+  input {{
+    width: 100%; padding: 9px 12px; border: 1px solid #dcdcec; border-radius: 8px;
+    font-size: 0.9rem; background: #f7f8fd; box-sizing: border-box;
+  }}
+  button {{
+    width: 100%; margin-top: 22px; padding: 10px; border: none; border-radius: 8px;
+    background: #2563eb; color: white; font-weight: 600; font-size: 0.92rem; cursor: pointer;
+  }}
+  .error {{
+    margin-top: 14px; padding: 8px 10px; border-radius: 8px; font-size: 0.82rem;
+    background: #fee2e2; color: #b91c1c;
+  }}
+</style></head>
+<body>
+  <div class="card">
+    <h1>Authorize access to ArdRAG</h1>
+    <p class="subtitle">{client_name} is requesting access to your documents.</p>
+    {error_html}
+    <form method="post">
+      <input type="hidden" name="client_id" value="{client_id}" />
+      <input type="hidden" name="redirect_uri" value="{redirect_uri}" />
+      <input type="hidden" name="redirect_uri_provided_explicitly" value="{redirect_uri_provided_explicitly}" />
+      <input type="hidden" name="state" value="{state}" />
+      <input type="hidden" name="code_challenge" value="{code_challenge}" />
+      <input type="hidden" name="scope" value="{scope}" />
+      <label for="username">Username</label>
+      <input type="text" id="username" name="username" autocomplete="username" required autofocus />
+      <label for="password">Password</label>
+      <input type="password" id="password" name="password" autocomplete="current-password" required />
+      <button type="submit">Authorize</button>
+    </form>
+  </div>
+</body></html>
+"""
+
+
+def _oauth_login_html(params: dict, error: str = "") -> str:
+    return _LOGIN_PAGE.format(
+        client_name=params.get("client_id", "An application"),
+        client_id=params.get("client_id", ""),
+        redirect_uri=params.get("redirect_uri", ""),
+        redirect_uri_provided_explicitly=params.get("redirect_uri_provided_explicitly", "True"),
+        state=params.get("state", ""),
+        code_challenge=params.get("code_challenge", ""),
+        scope=params.get("scope", ""),
+        error_html=f'<div class="error">{error}</div>' if error else "",
+    )
+
+
+if MCP_OAUTH_ENABLED:
+
+    @mcp.custom_route("/oauth-login", methods=["GET", "POST"])
+    async def oauth_login(request: Request):
+        from ardrag.oauth_provider import issue_code_and_redirect
+
+        if request.method == "GET":
+            return HTMLResponse(_oauth_login_html(dict(request.query_params)))
+
+        form = await request.form()
+        params = {
+            "client_id": form.get("client_id", ""),
+            "redirect_uri": form.get("redirect_uri", ""),
+            "redirect_uri_provided_explicitly": form.get("redirect_uri_provided_explicitly", "True"),
+            "state": form.get("state", ""),
+            "code_challenge": form.get("code_challenge", ""),
+            "scope": form.get("scope", ""),
+        }
+        username = form.get("username", "")
+        password = form.get("password", "")
+
+        if not verify_credentials(username, password):
+            return HTMLResponse(_oauth_login_html(params, error="Invalid username or password."))
+
+        try:
+            redirect_url = issue_code_and_redirect(
+                client_id=params["client_id"],
+                redirect_uri=params["redirect_uri"],
+                redirect_uri_provided_explicitly=params["redirect_uri_provided_explicitly"] == "True",
+                state=params["state"] or None,
+                code_challenge=params["code_challenge"],
+                scope=params["scope"],
+                subject=username,
+            )
+        except ValueError as e:
+            return HTMLResponse(_oauth_login_html(params, error=str(e)), status_code=400)
+
+        return RedirectResponse(url=redirect_url, status_code=302)
 
 
 @mcp.tool

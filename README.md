@@ -20,8 +20,8 @@ storage, and retrieval.
   can't starve the rest of the container — or the host, on a small VPS.
 - **FastAPI backend** — REST API + serves the web UI, at port `8000`. Protected by a custom
   session-cookie login (`/login` page, `ADMIN_USER` / `ADMIN_PASSWORD` in `.env`) — not the
-  browser's native Basic Auth popup. The MCP server (port 8001) is a separate process and is
-  intentionally **not** covered by this auth.
+  browser's native Basic Auth popup. The MCP server (port 8001) is a separate process with its
+  own, independent auth story — unauthenticated by default, optionally OAuth-gated (see below).
 - **Web UI** (`/`) — file-manager style: upload (single/multiple/AI-classified files, with a live
   progress bar), organize into Vendor / Doc Type folders plus freeform multi-tags, search/filter by
   name/vendor/type/tag with pagination, bulk-edit metadata across a selection, preview/download
@@ -71,8 +71,40 @@ redirects to `/login` automatically on a 401.
 Set `SESSION_SECRET` in `.env` to a random 64-char hex string (e.g.
 `python3 -c "import secrets; print(secrets.token_hex(32))"`) so sessions survive container
 restarts — without it, a random secret is generated at startup and everyone gets logged out on
-every restart. **The MCP server (port 8001) is unauthenticated by design** — it's a separate
-process, not covered by this login.
+every restart. **The MCP server (port 8001) is unauthenticated by default** — see below if you
+need it locked down (e.g. for a Claude.ai Custom Connector, which requires OAuth).
+
+### MCP OAuth (optional — for Claude.ai Custom Connectors)
+
+Claude Code and other clients that speak plain SSE work against the MCP server with no auth at
+all. **Claude.ai's web Custom Connector UI is different: it requires the remote MCP server to
+implement OAuth 2.1**, including dynamic client registration — an unauthenticated SSE endpoint
+gets rejected there with a "couldn't register with the sign-in service" error.
+
+Ardrag ships a self-contained OAuth 2.1 authorization server (`ardrag/oauth_provider.py`), gated
+by your existing `ADMIN_USER`/`ADMIN_PASSWORD` — no third-party IdP (Google/GitHub/etc.) needed.
+It's **off by default**; enable it with:
+
+```bash
+MCP_OAUTH_ENABLED=true
+MCP_PUBLIC_URL=https://ardrag-mcp.your-domain.com   # the real public HTTPS URL of port 8001
+```
+
+Once enabled, hitting `/authorize` no longer auto-approves — it redirects to a real login page
+(`/oauth-login`) that checks your admin credentials before issuing an authorization code. Clients,
+authorization codes, access tokens, and refresh tokens (30-day expiry, rotated on refresh) are all
+persisted in SQLite, so registered connectors survive container redeploys — unlike FastMCP's
+built-in `InMemoryOAuthProvider`, which is explicitly for testing and both auto-approves anyone
+and forgets everything on restart.
+
+To add it to Claude.ai: Settings → Connectors → Add custom connector → paste your MCP server's
+public URL (e.g. `https://ardrag-mcp.your-domain.com/sse`). Claude.ai handles the registration
+and redirect dance automatically; you'll see Ardrag's login page once during setup.
+
+**Security note:** once enabled, this becomes the *only* thing standing between the public
+internet and your documents via MCP — same trust level as the web UI login. Don't leave
+`MCP_OAUTH_ENABLED=false` (fully open) on a long-lived public deployment unless you've restricted
+access some other way (Cloudflare Access on the MCP hostname, IP allowlist, etc.).
 
 ### Folders (Vendor / Doc Type) & tags
 
