@@ -281,5 +281,49 @@ def rag_add_notes(notes: list[dict]) -> dict:
     return {"status": "saved", "count": len(saved), "documents": saved}
 
 
+def _build_combined_app():
+    """Serve both MCP transports on one port so we don't break existing clients.
+
+    Claude Code connects via legacy SSE at /sse (GET stream + POST /messages/?session_id=...).
+    Claude Desktop (and other modern clients) use Streamable HTTP, which POSTs JSON-RPC directly
+    to a single endpoint — our /sse route only ever accepted GET, so those POSTs were bouncing
+    with 405 before Claude Desktop got anywhere near the OAuth flow. Since FastMCP's `run()` only
+    stands up one transport at a time, both `http_app()` variants are built separately (each is a
+    fully self-contained Starlette app with its own copy of the OAuth routes bound to the same
+    `mcp.auth` provider) and merged into a single app: MCP endpoint routes from both, OAuth/
+    well-known routes deduplicated by path, and both apps' lifespans (which start/stop each
+    transport's session manager) run together via AsyncExitStack.
+    """
+    import contextlib
+
+    from starlette.applications import Starlette
+    from starlette.routing import Route
+
+    sse_app = mcp.http_app(path="/sse", transport="sse")
+    streamable_app = mcp.http_app(path="/mcp", transport="streamable-http")
+
+    seen_paths = set()
+    combined_routes = []
+    for app in (sse_app, streamable_app):
+        for route in app.routes:
+            path = getattr(route, "path", None)
+            if path is not None and path in seen_paths:
+                continue
+            if path is not None:
+                seen_paths.add(path)
+            combined_routes.append(route)
+
+    @contextlib.asynccontextmanager
+    async def combined_lifespan(app):
+        async with contextlib.AsyncExitStack() as stack:
+            await stack.enter_async_context(sse_app.router.lifespan_context(sse_app))
+            await stack.enter_async_context(streamable_app.router.lifespan_context(streamable_app))
+            yield
+
+    return Starlette(routes=combined_routes, lifespan=combined_lifespan)
+
+
 if __name__ == "__main__":
-    mcp.run(transport="sse", host=MCP_HOST, port=MCP_PORT)
+    import uvicorn
+
+    uvicorn.run(_build_combined_app(), host=MCP_HOST, port=MCP_PORT)
