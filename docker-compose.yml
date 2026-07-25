@@ -1,0 +1,38 @@
+services:
+  qdrant:
+    image: qdrant/qdrant:latest
+    restart: unless-stopped
+    volumes:
+      - qdrant-data:/qdrant/storage
+    networks:
+      - default
+    mem_limit: 768m
+    cpus: 0.5
+
+  ardrag-backend:
+    build: .
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      QDRANT_URL: http://qdrant:6333
+    volumes:
+      - ardrag-data:/data
+    depends_on:
+      - qdrant
+    ports:
+      - "8000:8000"
+      - "8001:8001"
+    networks:
+      - default
+      - proxy-net
+    mem_limit: 3g
+    cpus: 1.5
+
+volumes:
+  qdrant-data:
+  ardrag-data:
+
+networks:
+  proxy-net:
+    external: true

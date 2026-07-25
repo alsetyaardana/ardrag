@@ -1,0 +1,1022 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>ArdRAG</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%232563eb'/%3E%3Cpath d='M9 7h9l5 5v13a1 1 0 0 1-1 1H9a1 1 0 0 1-1-1V8a1 1 0 0 1 1-1z' fill='white'/%3E%3Cpath d='M18 7v5h5' fill='none' stroke='%232563eb' stroke-width='1.4'/%3E%3Cline x1='11' y1='16.5' x2='19' y2='16.5' stroke='%232563eb' stroke-width='1.3'/%3E%3Cline x1='11' y1='19.5' x2='19' y2='19.5' stroke='%232563eb' stroke-width='1.3'/%3E%3Cline x1='11' y1='22.5' x2='16' y2='22.5' stroke='%232563eb' stroke-width='1.3'/%3E%3C/svg%3E" />
+<style>
+  :root {
+    color-scheme: light dark;
+    --accent: #2563eb;
+    --accent-hover: #1d4ed8;
+    --accent-soft: #e8effe;
+    --bg: #f6f7fb;
+    --surface: #ffffff;
+    --surface-2: #fafbfd;
+    --border: #e3e6ee;
+    --text: #16181d;
+    --text-muted: #6b7280;
+    --danger: #b00020;
+    --radius: 10px;
+    --shadow: 0 1px 2px rgba(16,24,40,0.04), 0 1px 3px rgba(16,24,40,0.06);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --accent: #4f7dfa;
+      --accent-hover: #6b91fb;
+      --accent-soft: #1f2a4d;
+      --bg: #0f1115;
+      --surface: #171920;
+      --surface-2: #1c1f28;
+      --border: #2a2e39;
+      --text: #e8e9ec;
+      --text-muted: #9aa0ac;
+      --shadow: 0 1px 2px rgba(0,0,0,0.3), 0 2px 6px rgba(0,0,0,0.25);
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, "Segoe UI", system-ui, sans-serif; margin: 0; padding: 0;
+    color: var(--text); background: var(--bg);
+  }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+
+  header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 12px 22px; background: var(--surface); border-bottom: 1px solid var(--border);
+    box-shadow: var(--shadow); position: sticky; top: 0; z-index: 10;
+  }
+  h1 { font-size: 1.15rem; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
+  nav { display: flex; gap: 4px; align-items: center; }
+  nav button {
+    background: none; border: none; padding: 7px 14px; cursor: pointer;
+    font-size: 0.86rem; font-weight: 500; border-radius: 7px; color: var(--text-muted);
+    transition: background 0.15s, color 0.15s;
+  }
+  nav button:hover { background: var(--surface-2); color: var(--text); }
+  nav button.active { background: var(--accent); color: white; }
+  nav button.active:hover { background: var(--accent-hover); }
+  #logout-btn { border: 1px solid var(--border); margin-left: 12px; color: var(--text); }
+
+  .layout { display: flex; height: calc(100vh - 57px); }
+  .sidebar {
+    width: 230px; border-right: 1px solid var(--border); background: var(--surface);
+    padding: 16px 12px; overflow-y: auto; flex-shrink: 0;
+  }
+  .sidebar h3 {
+    font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.05em;
+    color: var(--text-muted); margin: 4px 8px 10px; font-weight: 700;
+  }
+  .folder-vendor { margin-bottom: 12px; }
+  .folder-vendor-name { font-weight: 600; font-size: 0.85rem; padding: 5px 8px; color: var(--text); }
+  .folder-item {
+    padding: 6px 8px 6px 20px; font-size: 0.82rem; cursor: pointer; border-radius: 7px;
+    display: flex; justify-content: space-between; gap: 6px; color: var(--text-muted);
+    transition: background 0.12s, color 0.12s;
+  }
+  .folder-item:hover { background: var(--surface-2); color: var(--text); }
+  .folder-item.active { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+  .folder-item .count { color: var(--text-muted); font-size: 0.74rem; }
+
+  main { flex: 1; padding: 24px; overflow-y: auto; }
+  .tab { display: none; }
+  .tab.active { display: block; animation: fadein 0.15s ease; }
+  @keyframes fadein { from { opacity: 0; } to { opacity: 1; } }
+
+  p.muted, .muted { color: var(--text-muted); font-size: 0.85rem; }
+
+  .panel {
+    background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 16px 18px; margin-bottom: 16px; box-shadow: var(--shadow);
+  }
+
+  form.upload-form { display: flex; gap: 8px; flex-wrap: wrap; align-items: flex-start; }
+  .filter-bar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .filter-bar .grow { flex: 1; min-width: 180px; }
+
+  input[type="text"], input[type="password"], input[type="file"], select {
+    padding: 7px 10px; border: 1px solid var(--border); border-radius: 7px; font-size: 0.85rem;
+    background: var(--surface-2); color: var(--text); font-family: inherit;
+  }
+  input[type="text"]:focus, input[type="password"]:focus, select:focus {
+    outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft);
+  }
+  input[type="file"] {
+    padding: 5px; color: var(--text-muted); font-size: 0.82rem; display: inline-flex; align-items: center;
+  }
+  input[type="file"]::file-selector-button {
+    cursor: pointer; padding: 6px 14px; margin-right: 10px; background: var(--accent); color: white;
+    border: none; border-radius: 6px; font-size: 0.82rem; font-weight: 600; font-family: inherit;
+    transition: background 0.15s;
+  }
+  input[type="file"]::file-selector-button:hover { background: var(--accent-hover); }
+
+  input[type="checkbox"] {
+    accent-color: var(--accent); width: 15px; height: 15px; cursor: pointer; vertical-align: middle;
+  }
+  .ai-toggle {
+    display: inline-flex; align-items: center; gap: 7px; font-size: 0.83rem; padding: 7px 12px;
+    border: 1px solid var(--border); border-radius: 7px; background: var(--surface-2); cursor: pointer;
+    user-select: none; color: var(--text);
+  }
+
+  button { font-family: inherit; }
+  button.primary {
+    cursor: pointer; padding: 8px 16px; background: var(--accent); color: white;
+    border: none; border-radius: 7px; font-size: 0.85rem; font-weight: 600;
+    transition: background 0.15s;
+  }
+  button.primary:hover { background: var(--accent-hover); }
+  button.secondary {
+    cursor: pointer; padding: 8px 16px; background: var(--surface); color: var(--text);
+    border: 1px solid var(--border); border-radius: 7px; font-size: 0.85rem; font-weight: 500;
+    transition: background 0.15s;
+  }
+  button.secondary:hover { background: var(--surface-2); }
+  button.link {
+    cursor: pointer; background: none; border: none; color: var(--text-muted);
+    font-size: 0.82rem; padding: 4px 6px; text-decoration: underline;
+  }
+  button.link:hover { color: var(--text); }
+
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 10px 8px; font-size: 0.84rem; }
+  thead th {
+    color: var(--text-muted); font-weight: 600; font-size: 0.72rem; text-transform: uppercase;
+    letter-spacing: 0.03em; border-bottom: 1px solid var(--border); padding-bottom: 10px;
+  }
+  tbody tr { border-bottom: 1px solid var(--border); transition: background 0.1s; }
+  tbody tr:hover { background: var(--surface-2); }
+  tbody tr:last-child { border-bottom: none; }
+  .danger { color: var(--danger); background: none; border: none; cursor: pointer; font-size: 0.82rem; }
+  .danger:hover { text-decoration: underline; }
+
+  #status { margin-bottom: 12px; font-size: 0.85rem; min-height: 1.2em; }
+
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 14px; margin-bottom: 22px; }
+  .card {
+    border: 1px solid var(--border); border-radius: var(--radius); padding: 16px;
+    background: var(--surface); box-shadow: var(--shadow);
+  }
+  .card .label { font-size: 0.7rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.04em; font-weight: 600; }
+  .card .value { font-size: 1.5rem; font-weight: 700; margin-top: 6px; letter-spacing: -0.01em; }
+
+  .badge { display: inline-block; padding: 3px 10px; border-radius: 20px; font-size: 0.74rem; font-weight: 600; }
+  .badge.ok { background: #16a34a1f; color: #16a34a; }
+  .badge.error { background: #dc26261f; color: #dc2626; }
+
+  .settings-form { display: flex; flex-direction: column; gap: 12px; max-width: 460px; }
+  .settings-form label { font-size: 0.82rem; font-weight: 500; display: flex; flex-direction: column; gap: 5px; }
+  .row { display: flex; gap: 10px; }
+  .row > * { flex: 1; }
+  .section-divider { border: none; border-top: 1px solid var(--border); margin: 20px 0; }
+  h3 { font-size: 0.95rem; margin: 0 0 6px; font-weight: 700; }
+
+  .tag-input-box {
+    display: flex; flex-wrap: wrap; gap: 5px; align-items: center;
+    border: 1px solid var(--border); border-radius: 7px; padding: 5px 7px; min-width: 200px;
+    background: var(--surface-2);
+  }
+  .tag-chip {
+    display: flex; align-items: center; gap: 4px; background: var(--accent-soft); color: var(--accent);
+    border-radius: 12px; padding: 2px 9px; font-size: 0.76rem; font-weight: 500;
+  }
+  .tag-chip .x { cursor: pointer; font-weight: bold; opacity: 0.6; }
+  .tag-chip .x:hover { opacity: 1; }
+  .tag-input-box input {
+    border: none; outline: none; flex: 1; min-width: 90px; padding: 3px; font-size: 0.82rem;
+    background: transparent; box-shadow: none !important;
+  }
+  .tag-badge {
+    display: inline-block; background: var(--accent-soft); color: var(--accent); border-radius: 10px;
+    padding: 2px 8px; font-size: 0.7rem; font-weight: 500; margin-right: 4px;
+  }
+
+  .progress-wrap { display: none; margin: 10px 0 16px; }
+  .progress-wrap.active { display: block; }
+  .progress-bar-track { width: 100%; height: 8px; background: var(--border); border-radius: 6px; overflow: hidden; }
+  .progress-bar-fill { height: 100%; background: var(--accent); width: 0%; transition: width 0.3s ease; }
+  .progress-label { font-size: 0.8rem; margin-top: 6px; display: flex; justify-content: space-between; color: var(--text-muted); }
+
+  .bulk-bar {
+    display: none; align-items: center; gap: 8px; background: var(--accent-soft); border-radius: var(--radius);
+    padding: 10px 14px; margin-bottom: 14px; flex-wrap: wrap;
+  }
+  .bulk-bar.active { display: flex; }
+  .checkbox-cell { width: 32px; }
+
+  .pagination-bar {
+    display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap;
+    gap: 10px; margin-top: 14px; font-size: 0.83rem;
+  }
+  .pagination-controls { display: flex; align-items: center; gap: 8px; }
+  #page-indicator { min-width: 90px; text-align: center; }
+  .pagination-controls button:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  .bar-chart { display: flex; flex-direction: column; gap: 8px; }
+  .bar-row { display: flex; align-items: center; gap: 10px; font-size: 0.78rem; }
+  .bar-row .bar-label {
+    width: 150px; flex-shrink: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    color: var(--text-muted);
+  }
+  .bar-row .bar-track { flex: 1; height: 10px; background: var(--border); border-radius: 5px; overflow: hidden; }
+  .bar-row .bar-fill { height: 100%; background: var(--accent); border-radius: 5px; transition: width 0.4s ease; }
+  .bar-row .bar-value { width: 44px; text-align: right; flex-shrink: 0; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+  .bar-chart-empty { color: var(--text-muted); font-size: 0.82rem; padding: 8px 0; }
+
+  .bar-chart.hourly {
+    display: flex; align-items: flex-end; gap: 2px; height: 90px; padding: 4px 0;
+  }
+  .bar-chart.hourly .hbar {
+    flex: 1; background: var(--accent); border-radius: 2px 2px 0 0; min-height: 2px;
+    transition: height 0.4s ease; opacity: 0.85;
+  }
+  .bar-chart.hourly .hbar:hover { opacity: 1; }
+</style>
+</head>
+<body>
+  <header>
+    <h1>ArdRAG</h1>
+    <nav>
+      <button class="tab-btn active" data-tab="documents">Documents</button>
+      <button class="tab-btn" data-tab="dashboard">Dashboard</button>
+      <button class="tab-btn" data-tab="settings">Settings</button>
+      <button id="logout-btn" class="secondary">Logout</button>
+    </nav>
+  </header>
+
+  <div class="layout">
+    <aside class="sidebar" id="sidebar">
+      <h3>Folders</h3>
+      <div id="folder-tree"></div>
+    </aside>
+
+    <main>
+      <section class="tab active" id="tab-documents">
+        <div class="panel">
+          <form class="upload-form" id="upload-form">
+            <input type="text" id="vendor-input" list="vendor-list" placeholder="Vendor (e.g. Maipu)" autocomplete="off" />
+            <datalist id="vendor-list"></datalist>
+            <input type="text" id="doctype-input" list="doctype-list" placeholder="Doc Type (e.g. Datasheet)" autocomplete="off" />
+            <datalist id="doctype-list"></datalist>
+            <div class="tag-input-box" id="tag-box">
+              <input type="text" id="tag-input" list="tag-list" placeholder="Add tag, press Enter" autocomplete="off" />
+            </div>
+            <datalist id="tag-list"></datalist>
+            <label class="ai-toggle">
+              <input type="checkbox" id="ai-classify-checkbox" /> Use AI to classify
+            </label>
+            <input type="file" id="file-input" multiple required />
+            <button class="primary" type="submit">Upload</button>
+          </form>
+          <div id="status"></div>
+          <div class="progress-wrap" id="progress-wrap">
+            <div class="progress-bar-track"><div class="progress-bar-fill" id="progress-bar-fill"></div></div>
+            <div class="progress-label">
+              <span id="progress-current">—</span>
+              <span id="progress-count">0 / 0</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="filter-bar">
+            <input type="text" id="filter-q" class="grow" placeholder="Search by filename…" autocomplete="off" name="ardrag-doc-search" />
+            <select id="filter-vendor"><option value="">All vendors</option></select>
+            <select id="filter-doctype"><option value="">All doc types</option></select>
+            <select id="filter-tag"><option value="">All tags</option></select>
+            <button class="link" id="clear-filters-btn" type="button">Clear filters</button>
+          </div>
+        </div>
+
+        <div class="bulk-bar" id="bulk-bar">
+          <span id="bulk-count" class="muted">0 selected</span>
+          <input type="text" id="bulk-vendor-input" list="vendor-list" placeholder="Set vendor…" autocomplete="off" />
+          <input type="text" id="bulk-doctype-input" list="doctype-list" placeholder="Set doc type…" autocomplete="off" />
+          <input type="text" id="bulk-tags-input" placeholder="Set tags (comma-separated)…" autocomplete="off" />
+          <button class="primary" id="bulk-apply-btn" type="button">Apply to selected</button>
+          <button class="secondary" id="bulk-clear-btn" type="button">Clear selection</button>
+        </div>
+
+        <div class="panel" style="padding:0; overflow-x:auto;">
+          <table>
+            <thead>
+              <tr>
+                <th class="checkbox-cell"><input type="checkbox" id="select-all-checkbox" /></th>
+                <th>Name</th><th>Vendor</th><th>Type</th><th>Tags</th><th>Chunks</th><th>Uploaded</th><th colspan="3"></th>
+              </tr>
+            </thead>
+            <tbody id="doc-list"></tbody>
+          </table>
+        </div>
+
+        <div class="pagination-bar">
+          <div class="muted" id="pagination-summary">—</div>
+          <div class="pagination-controls">
+            <select id="page-size-select">
+              <option value="10">10 / page</option>
+              <option value="20" selected>20 / page</option>
+              <option value="50">50 / page</option>
+              <option value="100">100 / page</option>
+            </select>
+            <button class="secondary" id="prev-page-btn" type="button">‹ Prev</button>
+            <span class="muted" id="page-indicator">Page 1 of 1</span>
+            <button class="secondary" id="next-page-btn" type="button">Next ›</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="tab" id="tab-dashboard">
+        <div class="cards" id="health-cards"></div>
+        <div class="panel">
+          <h3>Reindex status</h3>
+          <div id="reindex-status" class="muted">—</div>
+        </div>
+
+        <div class="panel">
+          <h3>MCP Tool Usage</h3>
+          <div class="cards" id="mcp-usage-cards"></div>
+          <p class="muted" id="mcp-usage-by-tool-label" style="margin-top:10px;">Calls by tool (last 24h)</p>
+          <div class="bar-chart" id="mcp-by-tool-chart"></div>
+          <p class="muted" style="margin-top:14px;">Calls per hour (last 24h)</p>
+          <div class="bar-chart hourly" id="mcp-hourly-chart"></div>
+        </div>
+
+        <div class="panel">
+          <h3>DeepSeek Token Usage (Classification)</h3>
+          <div class="cards" id="deepseek-usage-cards"></div>
+          <p class="muted" style="margin-top:10px;">Tokens per hour (last 24h)</p>
+          <div class="bar-chart hourly" id="deepseek-hourly-chart"></div>
+        </div>
+      </section>
+
+      <section class="tab" id="tab-settings">
+        <div class="panel">
+          <div class="settings-form">
+            <label>
+              Embedding model
+              <select id="model-select"></select>
+            </label>
+            <div class="row">
+              <label>
+                Chunk size (chars)
+                <input type="text" id="chunk-size-input" />
+              </label>
+              <label>
+                Chunk overlap (chars)
+                <input type="text" id="chunk-overlap-input" />
+              </label>
+            </div>
+            <p class="muted" id="settings-note"></p>
+            <div class="row">
+              <button class="primary" id="save-settings-btn" type="button">Save settings</button>
+              <button class="secondary" id="reindex-btn" type="button">Reindex all documents</button>
+            </div>
+            <div id="settings-status" class="muted"></div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="settings-form">
+            <h3>AI Classification (DeepSeek)</h3>
+            <p class="muted">Auto-detect vendor, doc type, and tags from document content.</p>
+            <label>
+              DeepSeek API key
+              <input type="password" id="deepseek-key-input" placeholder="sk-..." autocomplete="new-password" />
+            </label>
+            <p class="muted" id="deepseek-key-status"></p>
+            <label>
+              DeepSeek model
+              <input type="text" id="deepseek-model-input" placeholder="deepseek-chat" />
+            </label>
+            <button class="primary" id="save-deepseek-btn" type="button">Save DeepSeek settings</button>
+
+            <hr class="section-divider" />
+
+            <div class="row">
+              <label>
+                Classify scope
+                <select id="classify-scope-select">
+                  <option value="all">All documents</option>
+                  <option value="uncategorized">Only Uncategorized / General</option>
+                </select>
+              </label>
+            </div>
+            <button class="secondary" id="classify-btn" type="button">AI Classify documents</button>
+            <div class="progress-wrap" id="classify-progress-wrap">
+              <div class="progress-bar-track"><div class="progress-bar-fill" id="classify-progress-fill"></div></div>
+              <div class="progress-label">
+                <span id="classify-progress-current">—</span>
+                <span id="classify-progress-count">0 / 0</span>
+              </div>
+            </div>
+            <div id="classify-status" class="muted"></div>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script>
+    const state = {
+      vendor: null, doc_type: null, tags: [], selected: new Set(),
+      filters: { q: '', vendor: '', doc_type: '', tag: '' },
+      page: 1, pageSize: 20,
+    };
+
+    // ---- fetch wrapper: redirect to /login on session expiry ----
+    async function api(url, opts) {
+      const res = await fetch(url, opts);
+      if (res.status === 401) {
+        window.location.href = '/login';
+        throw new Error('Not authenticated');
+      }
+      return res;
+    }
+
+    document.getElementById('logout-btn').addEventListener('click', async () => {
+      await fetch('/logout', { method: 'POST' });
+      window.location.href = '/login';
+    });
+
+    // ---- tab switching ----
+    let dashboardRefreshTimer = null;
+    document.querySelectorAll('.tab-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+        document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+        btn.classList.add('active');
+        document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
+        document.getElementById('sidebar').style.display = btn.dataset.tab === 'documents' ? '' : 'none';
+
+        clearInterval(dashboardRefreshTimer);
+        if (btn.dataset.tab === 'dashboard') {
+          loadHealth();
+          dashboardRefreshTimer = setInterval(loadHealth, 5000);
+        }
+        if (btn.dataset.tab === 'settings') loadSettings();
+      });
+    });
+
+    // ---- tag chip input (upload form) ----
+    function renderTagChips() {
+      const box = document.getElementById('tag-box');
+      const input = document.getElementById('tag-input');
+      box.querySelectorAll('.tag-chip').forEach(el => el.remove());
+      for (const tag of state.tags) {
+        const chip = document.createElement('span');
+        chip.className = 'tag-chip';
+        chip.innerHTML = `${tag} <span class="x" data-tag="${tag}">×</span>`;
+        box.insertBefore(chip, input);
+      }
+    }
+    document.getElementById('tag-input').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ',') {
+        e.preventDefault();
+        const val = e.target.value.trim();
+        if (val && !state.tags.includes(val)) {
+          state.tags.push(val);
+          renderTagChips();
+        }
+        e.target.value = '';
+      }
+    });
+    document.getElementById('tag-box').addEventListener('click', (e) => {
+      if (e.target.classList.contains('x')) {
+        state.tags = state.tags.filter(t => t !== e.target.dataset.tag);
+        renderTagChips();
+      }
+    });
+
+    // ---- folders + filter dropdowns ----
+    async function loadFolders() {
+      const res = await api('/folders');
+      const folders = await res.json();
+      const byVendor = {};
+      for (const f of folders) {
+        (byVendor[f.vendor] ??= []).push(f);
+      }
+      const vendors = Object.keys(byVendor).sort();
+      const tree = document.getElementById('folder-tree');
+      let html = `<div class="folder-item ${!state.vendor ? 'active' : ''}" data-vendor="" data-type="">All documents</div>`;
+      for (const vendor of vendors) {
+        html += `<div class="folder-vendor"><div class="folder-vendor-name">${vendor}</div>`;
+        for (const f of byVendor[vendor]) {
+          const active = state.vendor === f.vendor && state.doc_type === f.doc_type;
+          html += `<div class="folder-item ${active ? 'active' : ''}" data-vendor="${f.vendor}" data-type="${f.doc_type}">
+            <span>${f.doc_type}</span><span class="count">${f.count}</span>
+          </div>`;
+        }
+        html += `</div>`;
+      }
+      tree.innerHTML = html;
+
+      const vendorList = document.getElementById('vendor-list');
+      vendorList.innerHTML = vendors.map(v => `<option value="${v}">`).join('');
+      const types = [...new Set(folders.map(f => f.doc_type))].sort();
+      document.getElementById('doctype-list').innerHTML = types.map(t => `<option value="${t}">`).join('');
+
+      const filterVendorSel = document.getElementById('filter-vendor');
+      const curVendor = filterVendorSel.value;
+      filterVendorSel.innerHTML = '<option value="">All vendors</option>' + vendors.map(v => `<option value="${v}">${v}</option>`).join('');
+      filterVendorSel.value = curVendor;
+
+      const filterTypeSel = document.getElementById('filter-doctype');
+      const curType = filterTypeSel.value;
+      filterTypeSel.innerHTML = '<option value="">All doc types</option>' + types.map(t => `<option value="${t}">${t}</option>`).join('');
+      filterTypeSel.value = curType;
+
+      tree.querySelectorAll('.folder-item').forEach(el => {
+        el.addEventListener('click', () => {
+          state.vendor = el.dataset.vendor || null;
+          state.doc_type = el.dataset.type || null;
+          state.filters.vendor = state.vendor || '';
+          state.filters.doc_type = state.doc_type || '';
+          document.getElementById('filter-vendor').value = state.filters.vendor;
+          document.getElementById('filter-doctype').value = state.filters.doc_type;
+          state.page = 1;
+          loadFolders();
+          loadDocuments();
+        });
+      });
+
+      const tagsRes = await api('/tags');
+      const allTags = await tagsRes.json();
+      document.getElementById('tag-list').innerHTML = allTags.map(t => `<option value="${t}">`).join('');
+      const filterTagSel = document.getElementById('filter-tag');
+      const curTag = filterTagSel.value;
+      filterTagSel.innerHTML = '<option value="">All tags</option>' + allTags.map(t => `<option value="${t}">${t}</option>`).join('');
+      filterTagSel.value = curTag;
+    }
+
+    // ---- filter bar wiring ----
+    let filterDebounce;
+    document.getElementById('filter-q').addEventListener('input', (e) => {
+      clearTimeout(filterDebounce);
+      filterDebounce = setTimeout(() => {
+        state.filters.q = e.target.value.trim();
+        state.page = 1;
+        loadDocuments();
+      }, 300);
+    });
+    document.getElementById('filter-vendor').addEventListener('change', (e) => {
+      state.filters.vendor = e.target.value;
+      state.vendor = e.target.value || null;
+      state.page = 1;
+      loadFolders();
+      loadDocuments();
+    });
+    document.getElementById('filter-doctype').addEventListener('change', (e) => {
+      state.filters.doc_type = e.target.value;
+      state.doc_type = e.target.value || null;
+      state.page = 1;
+      loadFolders();
+      loadDocuments();
+    });
+    document.getElementById('filter-tag').addEventListener('change', (e) => {
+      state.filters.tag = e.target.value;
+      state.page = 1;
+      loadDocuments();
+    });
+    document.getElementById('clear-filters-btn').addEventListener('click', () => {
+      state.filters = { q: '', vendor: '', doc_type: '', tag: '' };
+      state.vendor = null;
+      state.doc_type = null;
+      state.page = 1;
+      document.getElementById('filter-q').value = '';
+      document.getElementById('filter-vendor').value = '';
+      document.getElementById('filter-doctype').value = '';
+      document.getElementById('filter-tag').value = '';
+      loadFolders();
+      loadDocuments();
+    });
+
+    document.getElementById('page-size-select').addEventListener('change', (e) => {
+      state.pageSize = parseInt(e.target.value, 10);
+      state.page = 1;
+      loadDocuments();
+    });
+    document.getElementById('prev-page-btn').addEventListener('click', () => {
+      if (state.page > 1) {
+        state.page -= 1;
+        loadDocuments();
+      }
+    });
+    document.getElementById('next-page-btn').addEventListener('click', () => {
+      state.page += 1;
+      loadDocuments();
+    });
+
+    async function loadDocuments() {
+      const params = new URLSearchParams();
+      if (state.filters.vendor) params.set('vendor', state.filters.vendor);
+      if (state.filters.doc_type) params.set('doc_type', state.filters.doc_type);
+      if (state.filters.tag) params.set('tag', state.filters.tag);
+      if (state.filters.q) params.set('q', state.filters.q);
+      params.set('page', state.page);
+      params.set('page_size', state.pageSize);
+      const res = await api('/documents?' + params.toString());
+      const data = await res.json();
+      const docs = data.items || [];
+      document.getElementById('doc-list').innerHTML = docs.map(d => `
+        <tr>
+          <td class="checkbox-cell"><input type="checkbox" class="row-checkbox" data-id="${d.id}" ${state.selected.has(d.id) ? 'checked' : ''} /></td>
+          <td>${d.name}</td>
+          <td class="muted">${d.vendor}</td>
+          <td class="muted">${d.doc_type}</td>
+          <td>${(d.tags || []).map(t => `<span class="tag-badge">${t}</span>`).join('')}</td>
+          <td>${d.chunk_count}</td>
+          <td class="muted">${new Date(d.uploaded_at).toLocaleString()}</td>
+          <td><a href="/documents/${d.id}/preview" target="_blank" rel="noopener">Preview</a></td>
+          <td><a href="/documents/${d.id}/download">Download</a></td>
+          <td><button class="danger" data-id="${d.id}">Delete</button></td>
+        </tr>
+      `).join('') || `<tr><td colspan="10" class="muted" style="padding:20px; text-align:center;">No documents match these filters.</td></tr>`;
+      updateBulkBar();
+      renderPagination(data);
+    }
+
+    function renderPagination(data) {
+      const { total, page, page_size, total_pages } = data;
+      state.page = page;
+      const start = total === 0 ? 0 : (page - 1) * page_size + 1;
+      const end = Math.min(page * page_size, total);
+      document.getElementById('pagination-summary').textContent =
+        total === 0 ? 'No documents' : `Showing ${start}–${end} of ${total}`;
+      document.getElementById('page-indicator').textContent = `Page ${page} of ${total_pages}`;
+      document.getElementById('prev-page-btn').disabled = page <= 1;
+      document.getElementById('next-page-btn').disabled = page >= total_pages;
+    }
+
+    // ---- bulk selection ----
+    function updateBulkBar() {
+      const bar = document.getElementById('bulk-bar');
+      const count = state.selected.size;
+      bar.classList.toggle('active', count > 0);
+      document.getElementById('bulk-count').textContent = `${count} selected`;
+    }
+
+    document.getElementById('doc-list').addEventListener('change', (e) => {
+      if (!e.target.classList.contains('row-checkbox')) return;
+      const id = parseInt(e.target.dataset.id, 10);
+      if (e.target.checked) state.selected.add(id);
+      else state.selected.delete(id);
+      updateBulkBar();
+    });
+
+    document.getElementById('select-all-checkbox').addEventListener('change', (e) => {
+      document.querySelectorAll('.row-checkbox').forEach(cb => {
+        cb.checked = e.target.checked;
+        const id = parseInt(cb.dataset.id, 10);
+        if (e.target.checked) state.selected.add(id);
+        else state.selected.delete(id);
+      });
+      updateBulkBar();
+    });
+
+    document.getElementById('bulk-clear-btn').addEventListener('click', () => {
+      state.selected.clear();
+      document.querySelectorAll('.row-checkbox').forEach(cb => cb.checked = false);
+      document.getElementById('select-all-checkbox').checked = false;
+      updateBulkBar();
+    });
+
+    document.getElementById('bulk-apply-btn').addEventListener('click', async () => {
+      if (!state.selected.size) return;
+      const vendor = document.getElementById('bulk-vendor-input').value.trim();
+      const doctype = document.getElementById('bulk-doctype-input').value.trim();
+      const tagsRaw = document.getElementById('bulk-tags-input').value.trim();
+      const fd = new FormData();
+      for (const id of state.selected) fd.append('doc_ids', id);
+      if (vendor) fd.append('vendor', vendor);
+      if (doctype) fd.append('doc_type', doctype);
+      if (tagsRaw) tagsRaw.split(',').map(t => t.trim()).filter(Boolean).forEach(t => fd.append('tags', t));
+      const res = await api('/documents/bulk-update', { method: 'POST', body: fd });
+      const data = await res.json();
+      document.getElementById('status').textContent = `Updated ${data.updated_count} document(s).`;
+      state.selected.clear();
+      document.getElementById('bulk-vendor-input').value = '';
+      document.getElementById('bulk-doctype-input').value = '';
+      document.getElementById('bulk-tags-input').value = '';
+      await loadFolders();
+      await loadDocuments();
+    });
+
+    document.getElementById('upload-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const fileInput = document.getElementById('file-input');
+      const files = Array.from(fileInput.files);
+      if (!files.length) return;
+      const fd = new FormData();
+      for (const f of files) fd.append('files', f);
+      const vendor = document.getElementById('vendor-input').value.trim();
+      const doctype = document.getElementById('doctype-input').value.trim();
+      if (vendor) fd.append('vendor', vendor);
+      if (doctype) fd.append('doc_type', doctype);
+      for (const tag of state.tags) fd.append('tags', tag);
+      if (document.getElementById('ai-classify-checkbox').checked) fd.append('ai_classify', 'true');
+      const statusEl = document.getElementById('status');
+      statusEl.textContent = `Starting upload of ${files.length} file(s)...`;
+      try {
+        const res = await api('/documents/batch', { method: 'POST', body: fd });
+        if (!res.ok) throw new Error((await res.json()).detail || 'Upload failed');
+        fileInput.value = '';
+        state.tags = [];
+        renderTagChips();
+        statusEl.textContent = '';
+        pollBatchUpload();
+      } catch (err) {
+        statusEl.textContent = `Error: ${err.message}`;
+      }
+    });
+
+    // ---- upload progress bar ----
+    function setProgress(s) {
+      const wrap = document.getElementById('progress-wrap');
+      if (!s.running && s.total === 0) {
+        wrap.classList.remove('active');
+        return;
+      }
+      wrap.classList.add('active');
+      const pct = s.total ? Math.round((s.done / s.total) * 100) : 0;
+      document.getElementById('progress-bar-fill').style.width = pct + '%';
+      document.getElementById('progress-count').textContent = `${s.done} / ${s.total}`;
+      document.getElementById('progress-current').textContent = s.running
+        ? `Processing: ${s.current || '…'}`
+        : 'Done';
+    }
+
+    async function pollBatchUpload() {
+      const res = await api('/documents/batch/status');
+      const s = await res.json();
+      setProgress(s);
+      if (s.running) {
+        setTimeout(pollBatchUpload, 1500);
+      } else {
+        if (s.total > 0) {
+          const errors = (s.results || []).filter(r => r.status === 'error');
+          const succeeded = (s.results || []).filter(r => r.status !== 'error').length;
+          document.getElementById('status').textContent = `Done: ${succeeded}/${s.total} succeeded` +
+            (errors.length ? ` — errors: ${errors.map(e => `${e.filename} (${e.detail})`).join(', ')}` : '');
+        }
+        setTimeout(() => document.getElementById('progress-wrap').classList.remove('active'), 3000);
+        await loadFolders();
+        await loadDocuments();
+      }
+    }
+
+    // On page load, resume watching an already-running upload (e.g. after a page refresh).
+    async function checkOngoingUpload() {
+      const res = await api('/documents/batch/status');
+      const s = await res.json();
+      if (s.running) {
+        document.getElementById('status').textContent = 'Resuming progress for an upload already in progress...';
+        pollBatchUpload();
+      }
+    }
+
+    document.getElementById('doc-list').addEventListener('click', async (e) => {
+      const id = e.target.dataset.id;
+      if (!id) return;
+      if (!confirm('Delete this document?')) return;
+      await api(`/documents/${id}`, { method: 'DELETE' });
+      await loadFolders();
+      await loadDocuments();
+    });
+
+    // ---- dashboard ----
+    function fmtBytes(n) {
+      if (n < 1024) return n + ' B';
+      const units = ['KB', 'MB', 'GB', 'TB'];
+      let i = -1;
+      do { n /= 1024; i++; } while (n >= 1024 && i < units.length - 1);
+      return n.toFixed(1) + ' ' + units[i];
+    }
+
+    function renderBarChart(containerId, entries, maxItems) {
+      const el = document.getElementById(containerId);
+      const items = Object.entries(entries || {}).slice(0, maxItems || 10);
+      if (!items.length) {
+        el.innerHTML = `<div class="bar-chart-empty">No activity yet.</div>`;
+        return;
+      }
+      const max = Math.max(...items.map(([, v]) => v), 1);
+      el.innerHTML = items.map(([label, value]) => `
+        <div class="bar-row">
+          <span class="bar-label" title="${label}">${label}</span>
+          <div class="bar-track"><div class="bar-fill" style="width:${(value / max) * 100}%"></div></div>
+          <span class="bar-value">${value}</span>
+        </div>
+      `).join('');
+    }
+
+    function renderHourlyChart(containerId, hourlySeries) {
+      const el = document.getElementById(containerId);
+      const series = hourlySeries || [];
+      if (!series.length || series.every(h => h.count === 0)) {
+        el.innerHTML = `<div class="bar-chart-empty" style="height:90px; display:flex; align-items:center;">No activity in the last 24h.</div>`;
+        return;
+      }
+      const max = Math.max(...series.map(h => h.count), 1);
+      el.innerHTML = series.map(h => {
+        const time = new Date(h.hour).toLocaleTimeString([], { hour: '2-digit' });
+        const pct = Math.max((h.count / max) * 100, h.count > 0 ? 4 : 0);
+        return `<div class="hbar" style="height:${pct}%" title="${time} — ${h.count}"></div>`;
+      }).join('');
+    }
+
+    async function loadHealth() {
+      const res = await api('/health');
+      const h = await res.json();
+      const qStatus = h.qdrant.status === 'ok'
+        ? `<span class="badge ok">healthy${h.qdrant.hybrid ? ' (hybrid)' : ''}</span>`
+        : `<span class="badge error">error</span>`;
+      document.getElementById('health-cards').innerHTML = `
+        <div class="card"><div class="label">Documents</div><div class="value">${h.document_count}</div></div>
+        <div class="card"><div class="label">Chunks / Vectors</div><div class="value">${h.chunk_count}</div></div>
+        <div class="card"><div class="label">Qdrant</div><div class="value">${qStatus}</div></div>
+        <div class="card"><div class="label">Uptime</div><div class="value">${Math.floor(h.uptime_seconds/60)}m</div></div>
+        <div class="card"><div class="label">Uploads disk usage</div><div class="value">${fmtBytes(h.uploads_disk_usage_bytes)}</div></div>
+        <div class="card"><div class="label">Disk free</div><div class="value">${fmtBytes(h.disk_free_bytes)}</div></div>
+        <div class="card"><div class="label">Embedding model</div><div class="value" style="font-size:0.95rem">${h.settings.embedding_model}</div></div>
+        <div class="card"><div class="label">Chunk size / overlap</div><div class="value" style="font-size:1.1rem">${h.settings.chunk_size} / ${h.settings.chunk_overlap}</div></div>
+      `;
+      const r = h.reindex;
+      document.getElementById('reindex-status').textContent = r.running
+        ? `Running: ${r.done}/${r.total} (current: ${r.current || '-'})`
+        : (r.total ? `Last run: ${r.done}/${r.total} processed, ${r.errors.length} error(s)` : 'No reindex has run yet.');
+
+      const b = h.batch_upload;
+      if (b && (b.running || b.total > 0)) {
+        const errCount = (b.results || []).filter(x => x.status === 'error').length;
+        document.getElementById('reindex-status').textContent += b.running
+          ? ` | Batch upload running: ${b.done}/${b.total} (current: ${b.current || '-'})`
+          : ` | Last batch upload: ${b.done}/${b.total} processed, ${errCount} error(s)`;
+      }
+
+      const mcp = h.mcp_usage;
+      if (mcp) {
+        document.getElementById('mcp-usage-cards').innerHTML = `
+          <div class="card"><div class="label">Total calls (all-time)</div><div class="value">${mcp.total_calls_all_time}</div></div>
+          <div class="card"><div class="label">Calls (last ${mcp.window_hours}h)</div><div class="value">${mcp.total_calls_window}</div></div>
+        `;
+        renderBarChart('mcp-by-tool-chart', mcp.by_tool);
+        renderHourlyChart('mcp-hourly-chart', mcp.hourly);
+      }
+
+      const ds = h.deepseek_usage;
+      if (ds) {
+        document.getElementById('deepseek-usage-cards').innerHTML = `
+          <div class="card"><div class="label">Classify calls</div><div class="value">${ds.total_calls}</div></div>
+          <div class="card"><div class="label">Total tokens</div><div class="value">${ds.total_tokens.toLocaleString()}</div></div>
+          <div class="card"><div class="label">Prompt tokens</div><div class="value">${ds.prompt_tokens.toLocaleString()}</div></div>
+          <div class="card"><div class="label">Completion tokens</div><div class="value">${ds.completion_tokens.toLocaleString()}</div></div>
+        `;
+        renderHourlyChart('deepseek-hourly-chart', ds.hourly_tokens);
+      }
+    }
+
+    // ---- settings ----
+    async function loadSettings() {
+      const res = await api('/settings');
+      const data = await res.json();
+      const select = document.getElementById('model-select');
+      select.innerHTML = Object.entries(data.available_models)
+        .map(([name, dim]) => `<option value="${name}" ${name === data.current.embedding_model ? 'selected' : ''}>${name} (dim ${dim})</option>`)
+        .join('');
+      document.getElementById('chunk-size-input').value = data.current.chunk_size;
+      document.getElementById('chunk-overlap-input').value = data.current.chunk_overlap;
+      document.getElementById('settings-note').textContent =
+        'Changing the embedding model requires a full reindex (it recreates the vector collection). Changing chunk size/overlap only affects documents indexed after the change — run Reindex to apply retroactively.';
+
+      document.getElementById('deepseek-model-input').value = data.current.deepseek_model || 'deepseek-chat';
+      document.getElementById('deepseek-key-status').textContent = data.current.deepseek_api_key_set
+        ? 'API key is set. Leave the field blank to keep it, or enter a new one to replace it.'
+        : 'No API key set yet — AI Classify will not work until you add one.';
+    }
+
+    document.getElementById('save-deepseek-btn').addEventListener('click', async () => {
+      const fd = new FormData();
+      const key = document.getElementById('deepseek-key-input').value.trim();
+      if (key) fd.append('deepseek_api_key', key);
+      fd.append('deepseek_model', document.getElementById('deepseek-model-input').value.trim() || 'deepseek-chat');
+      const res = await api('/settings', { method: 'POST', body: fd });
+      const data = await res.json();
+      document.getElementById('deepseek-key-input').value = '';
+      document.getElementById('deepseek-key-status').textContent = data.settings.deepseek_api_key_set
+        ? 'Saved. API key is set.'
+        : 'Saved, but no API key is set yet.';
+    });
+
+    // ---- AI classify backfill ----
+    function setClassifyProgress(s) {
+      const wrap = document.getElementById('classify-progress-wrap');
+      if (!s.running && s.total === 0) {
+        wrap.classList.remove('active');
+        return;
+      }
+      wrap.classList.add('active');
+      const pct = s.total ? Math.round((s.done / s.total) * 100) : 0;
+      document.getElementById('classify-progress-fill').style.width = pct + '%';
+      document.getElementById('classify-progress-count').textContent = `${s.done} / ${s.total}`;
+      document.getElementById('classify-progress-current').textContent = s.running
+        ? `Classifying: ${s.current || '…'}`
+        : 'Done';
+    }
+
+    async function pollClassify() {
+      const res = await api('/classify/status');
+      const s = await res.json();
+      setClassifyProgress(s);
+      if (s.running) {
+        setTimeout(pollClassify, 1500);
+      } else {
+        if (s.total > 0) {
+          document.getElementById('classify-status').textContent =
+            `Done: ${s.total - s.errors.length}/${s.total} classified` +
+            (s.errors.length ? ` — errors: ${s.errors.map(e => `${e.filename} (${e.detail})`).join(', ')}` : '');
+        }
+        setTimeout(() => document.getElementById('classify-progress-wrap').classList.remove('active'), 3000);
+        await loadFolders();
+        await loadDocuments();
+      }
+    }
+
+    document.getElementById('classify-btn').addEventListener('click', async () => {
+      const scope = document.getElementById('classify-scope-select').value;
+      const fd = new FormData();
+      fd.append('scope', scope);
+      const statusEl = document.getElementById('classify-status');
+      const res = await api('/classify/backfill', { method: 'POST', body: fd });
+      if (!res.ok) {
+        const data = await res.json();
+        statusEl.textContent = `Error: ${data.detail}`;
+        return;
+      }
+      statusEl.textContent = 'AI classification started...';
+      pollClassify();
+    });
+
+    async function checkOngoingClassify() {
+      const res = await api('/classify/status');
+      const s = await res.json();
+      if (s.running) pollClassify();
+    }
+
+    document.getElementById('save-settings-btn').addEventListener('click', async () => {
+      const fd = new FormData();
+      fd.append('embedding_model', document.getElementById('model-select').value);
+      fd.append('chunk_size', document.getElementById('chunk-size-input').value);
+      fd.append('chunk_overlap', document.getElementById('chunk-overlap-input').value);
+      const statusEl = document.getElementById('settings-status');
+      statusEl.textContent = 'Saving...';
+      const res = await api('/settings', { method: 'POST', body: fd });
+      const data = await res.json();
+      statusEl.textContent = data.reindex_required
+        ? 'Saved. Model changed — click "Reindex all documents" to apply.'
+        : 'Saved.';
+    });
+
+    document.getElementById('reindex-btn').addEventListener('click', async () => {
+      const statusEl = document.getElementById('settings-status');
+      const fd = new FormData();
+      fd.append('recreate_collection', 'true');
+      const res = await api('/reindex', { method: 'POST', body: fd });
+      if (res.status === 409) {
+        statusEl.textContent = 'A reindex is already running.';
+        return;
+      }
+      statusEl.textContent = 'Reindex started — check the Dashboard tab for progress.';
+      pollReindex();
+    });
+
+    async function pollReindex() {
+      const res = await api('/reindex/status');
+      const s = await res.json();
+      if (s.running) {
+        setTimeout(pollReindex, 2000);
+      } else {
+        loadFolders();
+        loadDocuments();
+      }
+    }
+
+    // ---- init ----
+    // Guard against browsers autofilling the saved login username into this field on page load
+    // (it looks like a generic text input to the password manager's heuristics).
+    document.getElementById('filter-q').value = '';
+    state.filters.q = '';
+    setTimeout(() => {
+      if (document.getElementById('filter-q').value && !state.filters.q) {
+        document.getElementById('filter-q').value = '';
+      }
+    }, 400);
+
+    loadFolders();
+    loadDocuments();
+    checkOngoingUpload();
+    checkOngoingClassify();
+  </script>
+</body>
+</html>
