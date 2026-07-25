@@ -60,10 +60,11 @@ ALLOWED_UPLOAD_EXTENSIONS = {
 # etc.) shouldn't be able to balloon memory/CPU usage during extraction+embedding.
 MAX_UPLOAD_SIZE_BYTES = int(os.getenv("MAX_UPLOAD_SIZE_MB", "50")) * 1024 * 1024
 
-# Public HTTPS URL the MCP server is reachable at (e.g. through the Cloudflare Tunnel hostname).
-# Required for OAuth: the issuer/base URL advertised in /.well-known/oauth-authorization-server
-# must be the real public address, not the internal 0.0.0.0:8001 bind address. Only needed if
-# MCP_OAUTH_ENABLED is set — plain SSE clients (e.g. Claude Code) don't need this at all.
+# First-boot seed values only. MCP transports/access-mode/public-URL are configured at runtime
+# from the web UI's "MCP Server" settings panel (stored in the Settings table — see db.py's
+# _migrate_mcp_settings_columns) — these env vars are only read once, during that first DB
+# migration, so an existing .env-based deployment keeps its current behavior after upgrading.
+# After that first migration, changing these env vars has no effect; use the GUI instead.
 MCP_PUBLIC_URL = os.getenv("MCP_PUBLIC_URL", "")
 MCP_OAUTH_ENABLED = os.getenv("MCP_OAUTH_ENABLED", "false").lower() in ("1", "true", "yes")
 

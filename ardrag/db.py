@@ -1,4 +1,7 @@
+import hashlib
 import json
+import os
+import secrets
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -6,7 +9,14 @@ from typing import Optional
 from sqlalchemy import func, text
 from sqlmodel import Field, Session, SQLModel, create_engine, select
 
-from ardrag.config import DEFAULT_CHUNK_OVERLAP, DEFAULT_CHUNK_SIZE, DEFAULT_EMBEDDING_MODEL, SQLITE_PATH
+from ardrag.config import (
+    DEFAULT_CHUNK_OVERLAP,
+    DEFAULT_CHUNK_SIZE,
+    DEFAULT_EMBEDDING_MODEL,
+    MCP_OAUTH_ENABLED,
+    MCP_PUBLIC_URL,
+    SQLITE_PATH,
+)
 
 _engine = create_engine(f"sqlite:///{SQLITE_PATH}")
 
@@ -39,6 +49,24 @@ class Settings(SQLModel, table=True):
     chunk_overlap: int = Field(default=DEFAULT_CHUNK_OVERLAP)
     deepseek_api_key: str = Field(default="")
     deepseek_model: str = Field(default="deepseek-chat")
+    # MCP server settings — GUI-configurable, source of truth after first-boot migration seeds
+    # them from the legacy .env-only MCP_OAUTH_ENABLED/MCP_PUBLIC_URL values.
+    mcp_sse_enabled: bool = Field(default=True)
+    mcp_streamable_enabled: bool = Field(default=True)
+    mcp_anonymous_enabled: bool = Field(default=True)
+    mcp_oauth_enabled: bool = Field(default=False)
+    mcp_public_url: str = Field(default="")
+
+
+class McpUser(SQLModel, table=True):
+    """MCP-only login accounts, independent of the web UI's single ADMIN_USER — used for the
+    OAuth login form when MCP OAuth access mode is enabled, so MCP access can be granted/revoked
+    per-person without touching the shared admin credentials."""
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    username: str = Field(unique=True, index=True)
+    password_hash: str
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 class McpCallLog(SQLModel, table=True):
@@ -138,11 +166,33 @@ def _migrate_oauth_columns() -> None:
         conn.commit()
 
 
+def _migrate_mcp_settings_columns() -> None:
+    with _engine.connect() as conn:
+        cols = {row[1] for row in conn.execute(text("PRAGMA table_info(settings)"))}
+        # Seed from the legacy env-only vars only on first migration (column didn't exist yet),
+        # so an existing deployment's current behavior (e.g. MCP_OAUTH_ENABLED=true in .env)
+        # carries over instead of silently resetting to the GUI defaults.
+        if "mcp_sse_enabled" not in cols:
+            conn.execute(text("ALTER TABLE settings ADD COLUMN mcp_sse_enabled BOOLEAN DEFAULT 1"))
+        if "mcp_streamable_enabled" not in cols:
+            conn.execute(text("ALTER TABLE settings ADD COLUMN mcp_streamable_enabled BOOLEAN DEFAULT 1"))
+        if "mcp_anonymous_enabled" not in cols:
+            seed_anonymous = 0 if MCP_OAUTH_ENABLED else 1
+            conn.execute(text(f"ALTER TABLE settings ADD COLUMN mcp_anonymous_enabled BOOLEAN DEFAULT {seed_anonymous}"))
+        if "mcp_oauth_enabled" not in cols:
+            seed_oauth = 1 if MCP_OAUTH_ENABLED else 0
+            conn.execute(text(f"ALTER TABLE settings ADD COLUMN mcp_oauth_enabled BOOLEAN DEFAULT {seed_oauth}"))
+        if "mcp_public_url" not in cols:
+            conn.execute(text(f"ALTER TABLE settings ADD COLUMN mcp_public_url VARCHAR DEFAULT '{MCP_PUBLIC_URL}'"))
+        conn.commit()
+
+
 def init_db() -> None:
     SQLModel.metadata.create_all(_engine)
     _migrate_document_columns()
     _migrate_settings_columns()
     _migrate_oauth_columns()
+    _migrate_mcp_settings_columns()
     with Session(_engine) as session:
         if not session.get(Settings, 1):
             session.add(Settings(id=1))
@@ -563,3 +613,47 @@ def oauth_delete_refresh_token(token: str) -> None:
         if row:
             session.delete(row)
             session.commit()
+
+
+# ---- MCP-specific user accounts (separate from ADMIN_USER) ----
+
+
+def _hash_password(password: str, salt: Optional[bytes] = None) -> str:
+    salt = salt or os.urandom(16)
+    digest = hashlib.pbkdf2_hmac("sha256", password.encode(), salt, 200_000)
+    return f"{salt.hex()}${digest.hex()}"
+
+
+def mcp_user_create(username: str, password: str) -> McpUser:
+    with Session(_engine) as session:
+        if session.exec(select(McpUser).where(McpUser.username == username)).first():
+            raise ValueError(f"A user named '{username}' already exists.")
+        user = McpUser(username=username, password_hash=_hash_password(password))
+        session.add(user)
+        session.commit()
+        session.refresh(user)
+        return user
+
+
+def mcp_user_verify(username: str, password: str) -> bool:
+    with Session(_engine) as session:
+        user = session.exec(select(McpUser).where(McpUser.username == username)).first()
+        if not user:
+            return False
+        salt_hex, _, expected_hex = user.password_hash.partition("$")
+        computed = _hash_password(password, bytes.fromhex(salt_hex))
+        return secrets.compare_digest(computed, user.password_hash)
+
+
+def mcp_user_list() -> list[McpUser]:
+    with Session(_engine) as session:
+        return list(session.exec(select(McpUser).order_by(McpUser.created_at)))
+
+
+def mcp_user_delete(user_id: int) -> Optional[McpUser]:
+    with Session(_engine) as session:
+        user = session.get(McpUser, user_id)
+        if user:
+            session.delete(user)
+            session.commit()
+        return user

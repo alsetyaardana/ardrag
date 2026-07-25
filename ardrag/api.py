@@ -9,7 +9,7 @@ from fastapi import Depends, FastAPI, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
-from ardrag import classify, core, db
+from ardrag import classify, core, db, mcp_supervisor
 from ardrag import classify_job
 from ardrag import reindex as reindex_mod
 from ardrag.auth import create_session_token, get_current_user, require_auth, verify_credentials
@@ -27,6 +27,17 @@ app = FastAPI(title="Ardrag API")
 
 db.init_db()
 core.ensure_collection()
+
+
+@app.on_event("startup")
+def _start_mcp_subprocess():
+    mcp_supervisor.start()
+
+
+@app.on_event("shutdown")
+def _stop_mcp_subprocess():
+    mcp_supervisor.stop()
+
 
 WEB_DIR = Path(__file__).parent / "web"
 _start_time = time.monotonic()
@@ -401,6 +412,76 @@ def update_settings(
         "model_changed": bool(model_changed),
         "reindex_required": bool(model_changed),
     }
+
+
+def _serialize_mcp_settings(settings: db.Settings, request: Request) -> dict:
+    base = settings.mcp_public_url or str(request.base_url).rstrip("/")
+    return {
+        "mcp_sse_enabled": settings.mcp_sse_enabled,
+        "mcp_streamable_enabled": settings.mcp_streamable_enabled,
+        "mcp_anonymous_enabled": settings.mcp_anonymous_enabled,
+        "mcp_oauth_enabled": settings.mcp_oauth_enabled,
+        "mcp_public_url": settings.mcp_public_url,
+        "sse_url": f"{base}/sse",
+        "mcp_url": f"{base}/mcp",
+        "mcp_users": [
+            {"id": u.id, "username": u.username, "created_at": u.created_at.isoformat()}
+            for u in db.mcp_user_list()
+        ],
+    }
+
+
+@app.get("/settings/mcp")
+def get_mcp_settings(request: Request, _: str = AuthDep):
+    return _serialize_mcp_settings(db.get_settings(), request)
+
+
+@app.post("/settings/mcp")
+def update_mcp_settings(
+    request: Request,
+    mcp_sse_enabled: bool = Form(False),
+    mcp_streamable_enabled: bool = Form(False),
+    mcp_anonymous_enabled: bool = Form(False),
+    mcp_oauth_enabled: bool = Form(False),
+    mcp_public_url: str = Form(""),
+    _: str = AuthDep,
+):
+    if mcp_oauth_enabled and not mcp_public_url.strip():
+        raise HTTPException(status_code=400, detail="Public URL is required when OAuth is enabled")
+    if not mcp_anonymous_enabled and not mcp_oauth_enabled:
+        raise HTTPException(
+            status_code=400,
+            detail="At least one access mode (Anonymous or OAuth) must stay enabled, or no client can connect",
+        )
+    settings = db.update_settings(
+        mcp_sse_enabled=mcp_sse_enabled,
+        mcp_streamable_enabled=mcp_streamable_enabled,
+        mcp_anonymous_enabled=mcp_anonymous_enabled,
+        mcp_oauth_enabled=mcp_oauth_enabled,
+        mcp_public_url=mcp_public_url.strip(),
+    )
+    mcp_supervisor.restart()
+    return _serialize_mcp_settings(settings, request)
+
+
+@app.post("/settings/mcp/users")
+def add_mcp_user(username: str = Form(...), password: str = Form(...), _: str = AuthDep):
+    username = username.strip()
+    if not username or not password:
+        raise HTTPException(status_code=400, detail="Username and password are required")
+    try:
+        user = db.mcp_user_create(username, password)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"id": user.id, "username": user.username, "created_at": user.created_at.isoformat()}
+
+
+@app.delete("/settings/mcp/users/{user_id}")
+def remove_mcp_user(user_id: int, _: str = AuthDep):
+    user = db.mcp_user_delete(user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    return {"status": "deleted", "id": user_id}
 
 
 @app.post("/classify/backfill")

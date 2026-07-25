@@ -168,10 +168,16 @@
 
   .settings-form { display: flex; flex-direction: column; gap: 12px; max-width: 460px; }
   .settings-form label { font-size: 0.82rem; font-weight: 500; display: flex; flex-direction: column; gap: 5px; }
+  .settings-form label:has(input[type="checkbox"]) { flex-direction: row; align-items: center; gap: 8px; font-weight: 400; }
+  .settings-form label:has(input[type="checkbox"]) input { width: auto; }
   .row { display: flex; gap: 10px; }
   .row > * { flex: 1; }
   .section-divider { border: none; border-top: 1px solid var(--border); margin: 20px 0; }
   h3 { font-size: 0.95rem; margin: 0 0 6px; font-weight: 700; }
+  h4 { font-size: 0.85rem; margin: 0 0 6px; font-weight: 700; }
+  #tab-settings .panel:has(#mcp-sse-enabled) .settings-form { max-width: 620px; }
+  .mcp-users-table { width: 100%; border-collapse: collapse; font-size: 0.82rem; margin-bottom: 8px; }
+  .mcp-users-table td { padding: 6px 4px; border-bottom: 1px solid var(--border); }
 
   .tag-input-box {
     display: flex; flex-wrap: wrap; gap: 5px; align-items: center;
@@ -414,6 +420,50 @@
             <div id="classify-status" class="muted"></div>
           </div>
         </div>
+
+        <div class="panel">
+          <div class="settings-form">
+            <h3>MCP Server</h3>
+            <p class="muted">Controls how AI clients (Claude Code, Claude Desktop, claude.ai) connect to this RAG over MCP.</p>
+
+            <div class="row">
+              <label><input type="checkbox" id="mcp-sse-enabled" /> Enable SSE transport (Claude Code)</label>
+              <label><input type="checkbox" id="mcp-streamable-enabled" /> Enable Streamable HTTP transport (Claude Desktop / claude.ai)</label>
+            </div>
+            <div class="row">
+              <label><input type="checkbox" id="mcp-anonymous-enabled" /> Allow anonymous access</label>
+              <label><input type="checkbox" id="mcp-oauth-enabled" /> Require OAuth login</label>
+            </div>
+            <p class="muted">Off = anyone with the URL can read your documents. claude.ai Custom Connectors require OAuth; Claude Desktop may also expect it over a remote URL even when it's off here.</p>
+
+            <label id="mcp-public-url-row" style="display:none;">
+              Public URL (required when OAuth is on)
+              <input type="text" id="mcp-public-url-input" placeholder="https://ardrag-mcp.example.com" />
+            </label>
+
+            <div class="row">
+              <label>SSE endpoint <input type="text" id="mcp-sse-url" readonly /></label>
+              <label>Streamable HTTP endpoint <input type="text" id="mcp-mcp-url" readonly /></label>
+            </div>
+
+            <button class="primary" id="save-mcp-settings-btn" type="button">Save MCP settings</button>
+            <div id="mcp-settings-status" class="muted"></div>
+
+            <hr class="section-divider" />
+
+            <div id="mcp-users-section" style="display:none;">
+              <h4>MCP Users</h4>
+              <p class="muted">Separate accounts for logging into the MCP OAuth flow — not the same as your web admin login.</p>
+              <table class="mcp-users-table" id="mcp-users-table"><tbody></tbody></table>
+              <div class="row">
+                <input type="text" id="mcp-user-username" placeholder="Username" />
+                <input type="password" id="mcp-user-password" placeholder="Password" autocomplete="new-password" />
+                <button class="secondary" id="add-mcp-user-btn" type="button">Add user</button>
+              </div>
+              <div id="mcp-users-status" class="muted"></div>
+            </div>
+          </div>
+        </div>
       </section>
     </main>
   </div>
@@ -455,7 +505,7 @@
           loadHealth();
           dashboardRefreshTimer = setInterval(loadHealth, 5000);
         }
-        if (btn.dataset.tab === 'settings') loadSettings();
+        if (btn.dataset.tab === 'settings') { loadSettings(); loadMcpSettings(); }
       });
     });
 
@@ -1001,6 +1051,98 @@
         loadDocuments();
       }
     }
+
+    // ---- MCP server settings ----
+    function renderMcpUsers(users) {
+      const tbody = document.querySelector('#mcp-users-table tbody');
+      tbody.innerHTML = users.map(u => `
+        <tr>
+          <td>${u.username}</td>
+          <td class="muted">${new Date(u.created_at).toLocaleDateString()}</td>
+          <td><button class="secondary remove-mcp-user-btn" data-id="${u.id}" type="button">Remove</button></td>
+        </tr>
+      `).join('') || '<tr><td class="muted">No MCP users yet.</td></tr>';
+    }
+
+    function updateMcpUrlRowVisibility() {
+      const oauthOn = document.getElementById('mcp-oauth-enabled').checked;
+      document.getElementById('mcp-public-url-row').style.display = oauthOn ? '' : 'none';
+      document.getElementById('mcp-users-section').style.display = oauthOn ? '' : 'none';
+    }
+
+    async function loadMcpSettings() {
+      const res = await api('/settings/mcp');
+      const data = await res.json();
+      document.getElementById('mcp-sse-enabled').checked = data.mcp_sse_enabled;
+      document.getElementById('mcp-streamable-enabled').checked = data.mcp_streamable_enabled;
+      document.getElementById('mcp-anonymous-enabled').checked = data.mcp_anonymous_enabled;
+      document.getElementById('mcp-oauth-enabled').checked = data.mcp_oauth_enabled;
+      document.getElementById('mcp-public-url-input').value = data.mcp_public_url || '';
+      document.getElementById('mcp-sse-url').value = data.sse_url;
+      document.getElementById('mcp-mcp-url').value = data.mcp_url;
+      renderMcpUsers(data.mcp_users);
+      updateMcpUrlRowVisibility();
+    }
+
+    document.getElementById('mcp-oauth-enabled').addEventListener('change', updateMcpUrlRowVisibility);
+
+    document.getElementById('save-mcp-settings-btn').addEventListener('click', async () => {
+      const statusEl = document.getElementById('mcp-settings-status');
+      const anonymousOn = document.getElementById('mcp-anonymous-enabled').checked;
+      const oauthOn = document.getElementById('mcp-oauth-enabled').checked;
+      if (!anonymousOn && !oauthOn) {
+        statusEl.textContent = 'Error: enable at least one of Anonymous or OAuth access, or nothing can connect.';
+        return;
+      }
+      const fd = new FormData();
+      fd.append('mcp_sse_enabled', document.getElementById('mcp-sse-enabled').checked);
+      fd.append('mcp_streamable_enabled', document.getElementById('mcp-streamable-enabled').checked);
+      fd.append('mcp_anonymous_enabled', anonymousOn);
+      fd.append('mcp_oauth_enabled', oauthOn);
+      fd.append('mcp_public_url', document.getElementById('mcp-public-url-input').value.trim());
+      statusEl.textContent = 'Saving and restarting MCP server...';
+      const res = await api('/settings/mcp', { method: 'POST', body: fd });
+      if (!res.ok) {
+        const data = await res.json();
+        statusEl.textContent = `Error: ${data.detail}`;
+        return;
+      }
+      const data = await res.json();
+      document.getElementById('mcp-sse-url').value = data.sse_url;
+      document.getElementById('mcp-mcp-url').value = data.mcp_url;
+      renderMcpUsers(data.mcp_users);
+      statusEl.textContent = 'Saved. MCP server restarted with the new settings.';
+    });
+
+    document.getElementById('add-mcp-user-btn').addEventListener('click', async () => {
+      const statusEl = document.getElementById('mcp-users-status');
+      const username = document.getElementById('mcp-user-username').value.trim();
+      const password = document.getElementById('mcp-user-password').value;
+      if (!username || !password) {
+        statusEl.textContent = 'Username and password are required.';
+        return;
+      }
+      const fd = new FormData();
+      fd.append('username', username);
+      fd.append('password', password);
+      const res = await api('/settings/mcp/users', { method: 'POST', body: fd });
+      if (!res.ok) {
+        const data = await res.json();
+        statusEl.textContent = `Error: ${data.detail}`;
+        return;
+      }
+      document.getElementById('mcp-user-username').value = '';
+      document.getElementById('mcp-user-password').value = '';
+      statusEl.textContent = 'User added.';
+      loadMcpSettings();
+    });
+
+    document.getElementById('mcp-users-table').addEventListener('click', async (e) => {
+      if (!e.target.classList.contains('remove-mcp-user-btn')) return;
+      const id = e.target.dataset.id;
+      await api(`/settings/mcp/users/${id}`, { method: 'DELETE' });
+      loadMcpSettings();
+    });
 
     // ---- init ----
     // Guard against browsers autofilling the saved login username into this field on page load

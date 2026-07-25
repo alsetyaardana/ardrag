@@ -5,8 +5,7 @@ from starlette.requests import Request
 from starlette.responses import HTMLResponse, RedirectResponse
 
 from ardrag import core, db
-from ardrag.auth import verify_credentials
-from ardrag.config import DEFAULT_TOP_K, MCP_HOST, MCP_OAUTH_ENABLED, MCP_PORT, MCP_PUBLIC_URL, UPLOAD_DIR
+from ardrag.config import DEFAULT_TOP_K, MCP_HOST, MCP_PORT, UPLOAD_DIR
 from ardrag.extract import extract_text
 
 db.init_db()
@@ -14,10 +13,21 @@ core.ensure_collection()
 
 DEFAULT_DOCUMENT_MAX_CHARS = 20000
 
+# Settings (transports, access mode, OAuth, public URL) are read once here at process startup
+# from the DB — the single source of truth since the GUI made them runtime-configurable. Changing
+# any of them from the web UI restarts this whole subprocess (see ardrag/mcp_supervisor.py) so the
+# new value takes effect; there is no live-reload within a running process.
+_settings = db.get_settings()
+MCP_SSE_ENABLED = _settings.mcp_sse_enabled
+MCP_STREAMABLE_ENABLED = _settings.mcp_streamable_enabled
+MCP_ANONYMOUS_ENABLED = _settings.mcp_anonymous_enabled
+MCP_OAUTH_ENABLED = _settings.mcp_oauth_enabled
+MCP_PUBLIC_URL = _settings.mcp_public_url
+
 _auth_provider = None
 if MCP_OAUTH_ENABLED:
     if not MCP_PUBLIC_URL:
-        raise RuntimeError("MCP_OAUTH_ENABLED is set but MCP_PUBLIC_URL is empty — set it to the public HTTPS URL of this MCP server.")
+        raise RuntimeError("MCP OAuth is enabled but no public URL is set — set it in the web UI's MCP Server settings.")
     from mcp.server.auth.settings import ClientRegistrationOptions
 
     from ardrag.oauth_provider import ArdragOAuthProvider
@@ -125,7 +135,7 @@ if MCP_OAUTH_ENABLED:
         username = form.get("username", "")
         password = form.get("password", "")
 
-        if not verify_credentials(username, password):
+        if not db.mcp_user_verify(username, password):
             return HTMLResponse(_oauth_login_html(params, error="Invalid username or password."))
 
         try:
@@ -281,36 +291,72 @@ def rag_add_notes(notes: list[dict]) -> dict:
     return {"status": "saved", "count": len(saved), "documents": saved}
 
 
+class _OptionalAuthEndpoint:
+    """Wraps a route whose endpoint is FastMCP's `RequireAuthMiddleware` so that a request with
+    no `Authorization` header at all falls through to anonymous access (calls the underlying MCP
+    app directly, bypassing the auth check), while a request that *does* send a Bearer token
+    still goes through normal validation — a garbage/expired token is still rejected. Only used
+    when both the Anonymous and OAuth access modes are enabled at once ("optional auth", not "no
+    auth")."""
+
+    def __init__(self, require_auth_endpoint):
+        self._require_auth = require_auth_endpoint
+        self._inner = require_auth_endpoint.app
+
+    async def __call__(self, scope, receive, send):
+        headers = scope.get("headers", [])
+        has_auth_header = any(h[0].lower() == b"authorization" for h in headers)
+        if has_auth_header:
+            await self._require_auth(scope, receive, send)
+        else:
+            await self._inner(scope, receive, send)
+
+
 def _build_combined_app():
-    """Serve both MCP transports on one port so we don't break existing clients.
+    """Serve the enabled MCP transport(s) on one port.
 
     Claude Code connects via legacy SSE at /sse (GET stream + POST /messages/?session_id=...).
     Claude Desktop (and other modern clients) use Streamable HTTP, which POSTs JSON-RPC directly
-    to a single endpoint — our /sse route only ever accepted GET, so those POSTs were bouncing
-    with 405 before Claude Desktop got anywhere near the OAuth flow. Since FastMCP's `run()` only
-    stands up one transport at a time, both `http_app()` variants are built separately (each is a
-    fully self-contained Starlette app with its own copy of the OAuth routes bound to the same
-    `mcp.auth` provider) and merged into a single app: MCP endpoint routes from both, OAuth/
-    well-known routes deduplicated by path, and both apps' lifespans (which start/stop each
-    transport's session manager) run together via AsyncExitStack.
+    to a single endpoint at /mcp. Since FastMCP's `run()` only stands up one transport at a time,
+    each enabled transport's `http_app()` is built separately (each is a fully self-contained
+    Starlette app with its own copy of the OAuth routes bound to the same `mcp.auth` provider) and
+    merged into a single app: MCP endpoint routes, OAuth/well-known routes deduplicated by path,
+    and lifespans (which start/stop each transport's session manager) run together via
+    AsyncExitStack.
     """
     import contextlib
 
     from starlette.applications import Starlette
     from starlette.routing import Route
 
-    sse_app = mcp.http_app(path="/sse", transport="sse")
-    streamable_app = mcp.http_app(path="/mcp", transport="streamable-http")
+    try:
+        from mcp.server.auth.middleware.bearer_auth import RequireAuthMiddleware
+    except ImportError:
+        RequireAuthMiddleware = None
+
+    sub_apps = []
+    if MCP_SSE_ENABLED:
+        sub_apps.append(mcp.http_app(path="/sse", transport="sse"))
+    if MCP_STREAMABLE_ENABLED:
+        sub_apps.append(mcp.http_app(path="/mcp", transport="streamable-http"))
 
     seen_paths = set()
     combined_routes = []
-    for app in (sse_app, streamable_app):
+    for app in sub_apps:
         for route in app.routes:
             path = getattr(route, "path", None)
             if path is not None and path in seen_paths:
                 continue
             if path is not None:
                 seen_paths.add(path)
+            if (
+                MCP_OAUTH_ENABLED
+                and MCP_ANONYMOUS_ENABLED
+                and RequireAuthMiddleware is not None
+                and isinstance(getattr(route, "endpoint", None), RequireAuthMiddleware)
+                and isinstance(route, Route)
+            ):
+                route = Route(route.path, endpoint=_OptionalAuthEndpoint(route.endpoint), methods=route.methods)
             combined_routes.append(route)
 
     # Each sub-app's per-route auth check (RequireAuthMiddleware wrapping the MCP endpoint
@@ -318,14 +364,14 @@ def _build_combined_app():
     # verifies the Bearer token and populates request.scope["user"] is registered as app-level
     # middleware (Starlette's `user_middleware`), not attached to any Route. Building a fresh
     # Starlette() with only the merged routes silently drops it, so every request looked
-    # unauthenticated regardless of token validity. Carry both sub-apps' middleware stacks over.
-    combined_middleware = list(sse_app.user_middleware) + list(streamable_app.user_middleware)
+    # unauthenticated regardless of token validity. Carry every sub-app's middleware stack over.
+    combined_middleware = [m for app in sub_apps for m in app.user_middleware]
 
     @contextlib.asynccontextmanager
     async def combined_lifespan(app):
         async with contextlib.AsyncExitStack() as stack:
-            await stack.enter_async_context(sse_app.router.lifespan_context(sse_app))
-            await stack.enter_async_context(streamable_app.router.lifespan_context(streamable_app))
+            for sub_app in sub_apps:
+                await stack.enter_async_context(sub_app.router.lifespan_context(sub_app))
             yield
 
     return Starlette(routes=combined_routes, middleware=combined_middleware, lifespan=combined_lifespan)
