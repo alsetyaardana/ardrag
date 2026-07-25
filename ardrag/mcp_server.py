@@ -313,6 +313,14 @@ def _build_combined_app():
                 seen_paths.add(path)
             combined_routes.append(route)
 
+    # Each sub-app's per-route auth check (RequireAuthMiddleware wrapping the MCP endpoint
+    # itself) rides along with its Route above, but the AuthenticationMiddleware that actually
+    # verifies the Bearer token and populates request.scope["user"] is registered as app-level
+    # middleware (Starlette's `user_middleware`), not attached to any Route. Building a fresh
+    # Starlette() with only the merged routes silently drops it, so every request looked
+    # unauthenticated regardless of token validity. Carry both sub-apps' middleware stacks over.
+    combined_middleware = list(sse_app.user_middleware) + list(streamable_app.user_middleware)
+
     @contextlib.asynccontextmanager
     async def combined_lifespan(app):
         async with contextlib.AsyncExitStack() as stack:
@@ -320,7 +328,7 @@ def _build_combined_app():
             await stack.enter_async_context(streamable_app.router.lifespan_context(streamable_app))
             yield
 
-    return Starlette(routes=combined_routes, lifespan=combined_lifespan)
+    return Starlette(routes=combined_routes, middleware=combined_middleware, lifespan=combined_lifespan)
 
 
 if __name__ == "__main__":
