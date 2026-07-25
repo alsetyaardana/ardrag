@@ -336,13 +336,16 @@ def log_deepseek_usage(prompt_tokens: int, completion_tokens: int, total_tokens:
 def get_deepseek_usage_summary(hours: int = 24) -> dict:
     with Session(_engine) as session:
         rows = list(session.exec(select(DeepseekUsageLog)))
+        # Filtered in SQL (not Python) so the comparison is done consistently by SQLite/SQLAlchemy
+        # rather than comparing an aware `cutoff` against naive datetimes read back from SQLite
+        # (SQLite drops tzinfo on round-trip — comparing them in Python raises TypeError).
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
+        recent = list(session.exec(select(DeepseekUsageLog).where(DeepseekUsageLog.called_at >= cutoff)))
 
     total_calls = len(rows)
     total_tokens = sum(r.total_tokens for r in rows)
     prompt_tokens = sum(r.prompt_tokens for r in rows)
     completion_tokens = sum(r.completion_tokens for r in rows)
-    cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
-    recent = [r for r in rows if r.called_at >= cutoff]
 
     return {
         "total_calls": total_calls,
