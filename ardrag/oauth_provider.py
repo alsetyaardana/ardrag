@@ -76,6 +76,8 @@ class ArdragOAuthProvider(OAuthProvider):
     async def authorize(self, client: OAuthClientInformationFull, params) -> str:
         # Deliberately does NOT auto-approve. Send the browser to our real login page —
         # /oauth-login validates against ADMIN_USER/ADMIN_PASSWORD and issues the code itself.
+        # `resource` (RFC 8707) must be carried through: MCP clients bind the issued token to
+        # this resource URL and reject it client-side if the token isn't scoped to it.
         query = urlencode(
             {
                 "client_id": client.client_id,
@@ -84,6 +86,7 @@ class ArdragOAuthProvider(OAuthProvider):
                 "state": params.state or "",
                 "code_challenge": params.code_challenge,
                 "scope": " ".join(params.scopes or []),
+                "resource": params.resource or "",
             }
         )
         return f"{OAUTH_LOGIN_PATH}?{query}"
@@ -103,6 +106,7 @@ class ArdragOAuthProvider(OAuthProvider):
             scopes=code["scopes"],
             expires_at=code["expires_at"],
             code_challenge=code["code_challenge"],
+            resource=code.get("resource"),
         )
 
     async def exchange_authorization_code(self, client: OAuthClientInformationFull, authorization_code: AuthorizationCode) -> OAuthToken:
@@ -116,8 +120,11 @@ class ArdragOAuthProvider(OAuthProvider):
         access_expires = int(time.time() + DEFAULT_ACCESS_TOKEN_EXPIRY_SECONDS)
         refresh_expires = int(time.time() + DEFAULT_REFRESH_TOKEN_EXPIRY_SECONDS)
         subject = stored["subject"]
+        resource = stored.get("resource")
 
-        db.oauth_save_access_token(access_token_value, client.client_id, stored["scopes"], access_expires, subject)
+        db.oauth_save_access_token(
+            access_token_value, client.client_id, stored["scopes"], access_expires, subject, resource
+        )
         db.oauth_save_refresh_token(
             refresh_token_value, client.client_id, stored["scopes"], refresh_expires, subject, access_token_value
         )
@@ -148,8 +155,12 @@ class ArdragOAuthProvider(OAuthProvider):
         if not set(use_scopes).issubset(original_scopes):
             raise TokenError("invalid_scope", "Requested scopes exceed those authorized by the refresh token.")
 
-        # Rotate: invalidate old pair, issue new pair.
+        # Rotate: invalidate old pair, issue new pair. Preserve the resource binding from the
+        # old access token, if any, so a refreshed token stays valid for the same MCP resource.
+        old_resource = None
         if stored.get("access_token"):
+            old_access = db.oauth_load_access_token(stored["access_token"])
+            old_resource = old_access.get("resource") if old_access else None
             db.oauth_delete_access_token(stored["access_token"])
         db.oauth_delete_refresh_token(refresh_token.token)
 
@@ -159,7 +170,7 @@ class ArdragOAuthProvider(OAuthProvider):
         refresh_expires = int(time.time() + DEFAULT_REFRESH_TOKEN_EXPIRY_SECONDS)
         subject = stored["subject"]
 
-        db.oauth_save_access_token(new_access, client.client_id, use_scopes, access_expires, subject)
+        db.oauth_save_access_token(new_access, client.client_id, use_scopes, access_expires, subject, old_resource)
         db.oauth_save_refresh_token(new_refresh, client.client_id, use_scopes, refresh_expires, subject, new_access)
 
         return OAuthToken(
@@ -177,7 +188,13 @@ class ArdragOAuthProvider(OAuthProvider):
         if stored["expires_at"] is not None and stored["expires_at"] < time.time():
             db.oauth_delete_access_token(token)
             return None
-        return AccessToken(token=stored["token"], client_id=stored["client_id"], scopes=stored["scopes"], expires_at=stored["expires_at"])
+        return AccessToken(
+            token=stored["token"],
+            client_id=stored["client_id"],
+            scopes=stored["scopes"],
+            expires_at=stored["expires_at"],
+            resource=stored.get("resource"),
+        )
 
     async def verify_token(self, token: str) -> AccessToken | None:
         return await self.load_access_token(token)
@@ -189,7 +206,16 @@ class ArdragOAuthProvider(OAuthProvider):
             db.oauth_delete_refresh_token(token.token)
 
 
-def issue_code_and_redirect(client_id: str, redirect_uri: str, redirect_uri_provided_explicitly: bool, state: str | None, code_challenge: str, scope: str, subject: str) -> str:
+def issue_code_and_redirect(
+    client_id: str,
+    redirect_uri: str,
+    redirect_uri_provided_explicitly: bool,
+    state: str | None,
+    code_challenge: str,
+    scope: str,
+    subject: str,
+    resource: str | None = None,
+) -> str:
     """Called by the /oauth-login route after a successful username/password check. Validates
     the redirect_uri against the registered client (prevents open-redirect via a forged query
     string), stores the authorization code, and returns the final redirect URL."""
@@ -201,6 +227,14 @@ def issue_code_and_redirect(client_id: str, redirect_uri: str, redirect_uri_prov
     expires_at = int(time.time() + 300)  # 5 minutes, matches standard auth-code lifetime
     scopes = scope.split() if scope else []
     db.oauth_save_auth_code(
-        code_value, client_id, redirect_uri, redirect_uri_provided_explicitly, code_challenge, scopes, expires_at, subject
+        code_value,
+        client_id,
+        redirect_uri,
+        redirect_uri_provided_explicitly,
+        code_challenge,
+        scopes,
+        expires_at,
+        subject,
+        resource,
     )
     return construct_redirect_uri(redirect_uri, code=code_value, state=state)

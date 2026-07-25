@@ -81,6 +81,7 @@ class OAuthAuthCode(SQLModel, table=True):
     scopes_json: str = "[]"
     expires_at: float
     subject: str
+    resource: Optional[str] = None
 
 
 class OAuthAccessToken(SQLModel, table=True):
@@ -89,6 +90,7 @@ class OAuthAccessToken(SQLModel, table=True):
     scopes_json: str = "[]"
     expires_at: Optional[float] = None
     subject: str
+    resource: Optional[str] = None
 
 
 class OAuthRefreshToken(SQLModel, table=True):
@@ -122,10 +124,25 @@ def _migrate_settings_columns() -> None:
         conn.commit()
 
 
+def _migrate_oauth_columns() -> None:
+    with _engine.connect() as conn:
+        tables = {row[0] for row in conn.execute(text("SELECT name FROM sqlite_master WHERE type='table'"))}
+        if "oauthauthcode" in tables:
+            cols = {row[1] for row in conn.execute(text("PRAGMA table_info(oauthauthcode)"))}
+            if "resource" not in cols:
+                conn.execute(text("ALTER TABLE oauthauthcode ADD COLUMN resource VARCHAR"))
+        if "oauthaccesstoken" in tables:
+            cols = {row[1] for row in conn.execute(text("PRAGMA table_info(oauthaccesstoken)"))}
+            if "resource" not in cols:
+                conn.execute(text("ALTER TABLE oauthaccesstoken ADD COLUMN resource VARCHAR"))
+        conn.commit()
+
+
 def init_db() -> None:
     SQLModel.metadata.create_all(_engine)
     _migrate_document_columns()
     _migrate_settings_columns()
+    _migrate_oauth_columns()
     with Session(_engine) as session:
         if not session.get(Settings, 1):
             session.add(Settings(id=1))
@@ -413,6 +430,7 @@ def oauth_save_auth_code(
     scopes: list[str],
     expires_at: float,
     subject: str,
+    resource: Optional[str] = None,
 ) -> None:
     with Session(_engine) as session:
         session.add(
@@ -425,6 +443,7 @@ def oauth_save_auth_code(
                 scopes_json=json.dumps(scopes),
                 expires_at=expires_at,
                 subject=subject,
+                resource=resource,
             )
         )
         session.commit()
@@ -444,6 +463,7 @@ def oauth_load_auth_code(code: str) -> Optional[dict]:
             "scopes": json.loads(row.scopes_json),
             "expires_at": row.expires_at,
             "subject": row.subject,
+            "resource": row.resource,
         }
 
 
@@ -456,12 +476,22 @@ def oauth_delete_auth_code(code: str) -> None:
 
 
 def oauth_save_access_token(
-    token: str, client_id: str, scopes: list[str], expires_at: Optional[float], subject: str
+    token: str,
+    client_id: str,
+    scopes: list[str],
+    expires_at: Optional[float],
+    subject: str,
+    resource: Optional[str] = None,
 ) -> None:
     with Session(_engine) as session:
         session.add(
             OAuthAccessToken(
-                token=token, client_id=client_id, scopes_json=json.dumps(scopes), expires_at=expires_at, subject=subject
+                token=token,
+                client_id=client_id,
+                scopes_json=json.dumps(scopes),
+                expires_at=expires_at,
+                subject=subject,
+                resource=resource,
             )
         )
         session.commit()
@@ -478,6 +508,7 @@ def oauth_load_access_token(token: str) -> Optional[dict]:
             "scopes": json.loads(row.scopes_json),
             "expires_at": row.expires_at,
             "subject": row.subject,
+            "resource": row.resource,
         }
 
 

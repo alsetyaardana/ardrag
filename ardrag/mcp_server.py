@@ -77,6 +77,7 @@ _LOGIN_PAGE = """<!doctype html>
       <input type="hidden" name="state" value="{state}" />
       <input type="hidden" name="code_challenge" value="{code_challenge}" />
       <input type="hidden" name="scope" value="{scope}" />
+      <input type="hidden" name="resource" value="{resource}" />
       <label for="username">Username</label>
       <input type="text" id="username" name="username" autocomplete="username" required autofocus />
       <label for="password">Password</label>
@@ -97,6 +98,7 @@ def _oauth_login_html(params: dict, error: str = "") -> str:
         state=params.get("state", ""),
         code_challenge=params.get("code_challenge", ""),
         scope=params.get("scope", ""),
+        resource=params.get("resource", ""),
         error_html=f'<div class="error">{error}</div>' if error else "",
     )
 
@@ -118,6 +120,7 @@ if MCP_OAUTH_ENABLED:
             "state": form.get("state", ""),
             "code_challenge": form.get("code_challenge", ""),
             "scope": form.get("scope", ""),
+            "resource": form.get("resource", ""),
         }
         username = form.get("username", "")
         password = form.get("password", "")
@@ -134,6 +137,7 @@ if MCP_OAUTH_ENABLED:
                 code_challenge=params["code_challenge"],
                 scope=params["scope"],
                 subject=username,
+                resource=params["resource"] or None,
             )
         except ValueError as e:
             return HTMLResponse(_oauth_login_html(params, error=str(e)), status_code=400)
