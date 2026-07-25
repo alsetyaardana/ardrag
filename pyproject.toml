@@ -2,6 +2,8 @@
 name = "ardrag"
 version = "0.1.0"
 description = "Personal RAG exposed as an MCP server"
+readme = "README.md"
+license = { file = "LICENSE" }
 requires-python = ">=3.11"
 dependencies = [
     "fastmcp>=2.0.0",
