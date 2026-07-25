@@ -44,6 +44,14 @@ storage, and retrieval.
     chunk), for when a search hit needs verifying against the complete source, e.g. exact port
     counts/specs that might straddle a chunk boundary. Truncates at `max_chars` (default 20000)
     and reports whether it did via the `truncated` field.
+  - `rag_compare_documents(doc_names, max_chars_per_doc)` — fetches full text of 2+ documents in
+    one call, labeled and ready for the calling model to draft a side-by-side spec comparison
+    table from (e.g. presales comparing similar products across a product line). Ardrag bundles
+    the source material; the calling model builds the table.
+  - `rag_suggest_bom(items, top_k_per_item)` — given a list of requirement line-items (e.g.
+    `["access switch 24-port", "core switch", "firewall"]`), searches each and returns top
+    candidate documents per item — a starting point for a quote/BOM draft. Pair with a
+    BOM-generation skill/tool downstream to turn the picks into a final document.
   - `rag_list_documents(vendor, doc_type, tag, q)` — `q` matches a filename substring
   - `rag_list_folders()`
   - `rag_list_tags()`

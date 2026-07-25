@@ -29,14 +29,7 @@ def rag_search(
     return core.search(query, top_k=top_k, vendor=vendor, doc_type=doc_type, tag=tag)
 
 
-@mcp.tool
-def rag_get_document(doc_name: str, max_chars: int = DEFAULT_DOCUMENT_MAX_CHARS) -> dict:
-    """Read the full original text of a document by its exact name (as returned by rag_search's
-    doc_name field or rag_list_documents' name field) — not just a retrieved chunk. Use this when
-    a search result chunk seems incomplete or you need exact figures (part numbers, port counts,
-    specs) that might have been split across chunk boundaries. Content is truncated to max_chars
-    (default 20000); check the 'truncated' field in the response."""
-    db.log_mcp_call("rag_get_document")
+def _get_document_full(doc_name: str, max_chars: int) -> dict:
     doc = db.get_document_by_name(doc_name)
     if not doc:
         return {"error": f"No document found with name '{doc_name}'"}
@@ -53,6 +46,51 @@ def rag_get_document(doc_name: str, max_chars: int = DEFAULT_DOCUMENT_MAX_CHARS)
         "text": text[:max_chars],
         "truncated": truncated,
         "total_chars": len(text),
+    }
+
+
+@mcp.tool
+def rag_get_document(doc_name: str, max_chars: int = DEFAULT_DOCUMENT_MAX_CHARS) -> dict:
+    """Read the full original text of a document by its exact name (as returned by rag_search's
+    doc_name field or rag_list_documents' name field) — not just a retrieved chunk. Use this when
+    a search result chunk seems incomplete or you need exact figures (part numbers, port counts,
+    specs) that might have been split across chunk boundaries. Content is truncated to max_chars
+    (default 20000); check the 'truncated' field in the response."""
+    db.log_mcp_call("rag_get_document")
+    return _get_document_full(doc_name, max_chars)
+
+
+@mcp.tool
+def rag_compare_documents(doc_names: list[str], max_chars_per_doc: int = 8000) -> dict:
+    """Fetch the full text of 2+ documents in one call, labeled and ready for you (the calling
+    model) to draft a side-by-side spec comparison table from — e.g. for presales proposals
+    comparing similar products across a product line. Ardrag doesn't build the table itself; it
+    just bundles the source material so you don't need N separate rag_get_document calls.
+    max_chars_per_doc caps each document's length (lower it if comparing many/long documents to
+    stay within your own context budget) — check each entry's 'truncated' field."""
+    db.log_mcp_call("rag_compare_documents")
+    if len(doc_names) < 2:
+        return {"error": "Provide at least 2 doc_names to compare."}
+    return {"documents": [_get_document_full(name, max_chars_per_doc) for name in doc_names]}
+
+
+@mcp.tool
+def rag_suggest_bom(items: list[str], top_k_per_item: int = 3) -> dict:
+    """Given a list of requirement line-items (e.g. ["access switch 24-port", "core switch",
+    "firewall"]), run a search for each and return the top matching documents per item — a
+    starting point for a quote/BOM draft. Ardrag only suggests candidate documents per category;
+    parsing the user's freeform request into line-items and picking final quantities/models is
+    up to you (the calling model). Pair with a BOM-generation skill/tool to turn the picks into
+    a final document."""
+    db.log_mcp_call("rag_suggest_bom")
+    return {
+        "results": [
+            {
+                "item": item,
+                "candidates": core.search(item, top_k=top_k_per_item),
+            }
+            for item in items
+        ]
     }
 
 
