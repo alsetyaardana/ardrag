@@ -95,6 +95,16 @@ natively in a new tab). `GET /documents/{id}/download` serves it as an attachmen
 original filename. Both require an active session, same as everything else in the web UI — handy
 for grabbing a document from your phone/another machine without needing the RAG search at all.
 
+### Upload restrictions
+
+Only `.pdf, .txt, .md, .csv, .json, .log` are accepted (`ALLOWED_UPLOAD_EXTENSIONS` in `.env` to
+change), and files over 50MB are rejected (`MAX_UPLOAD_SIZE_MB`). `extract_text()` only knows how
+to handle these — anything else (`.pptx`, `.docx`, `.xlsx`, images, archives, ...) is binary and
+would otherwise get blindly decoded as text, producing huge garbage content that still gets
+chunked/embedded, wasting resources and — for large binary files — capable of spiking memory/CPU
+hard enough to make the whole host crawl. Both checks happen before any extraction/embedding work
+starts, so a rejected file costs nothing.
+
 ### Batch upload
 
 `POST /documents/batch` accepts multiple files in one request (`files` form field, repeated) and

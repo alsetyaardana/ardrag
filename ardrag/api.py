@@ -13,7 +13,14 @@ from ardrag import classify, core, db
 from ardrag import classify_job
 from ardrag import reindex as reindex_mod
 from ardrag.auth import create_session_token, get_current_user, require_auth, verify_credentials
-from ardrag.config import SESSION_COOKIE_NAME, SESSION_MAX_AGE_SECONDS, SUPPORTED_EMBEDDING_MODELS, UPLOAD_DIR
+from ardrag.config import (
+    ALLOWED_UPLOAD_EXTENSIONS,
+    MAX_UPLOAD_SIZE_BYTES,
+    SESSION_COOKIE_NAME,
+    SESSION_MAX_AGE_SECONDS,
+    SUPPORTED_EMBEDDING_MODELS,
+    UPLOAD_DIR,
+)
 from ardrag.extract import extract_text
 
 app = FastAPI(title="Ardrag API")
@@ -90,6 +97,21 @@ def _ingest_bytes(
     tags: list[str],
     ai_classify: bool = False,
 ) -> dict:
+    ext = Path(filename).suffix.lower()
+    if ext not in ALLOWED_UPLOAD_EXTENSIONS:
+        allowed = ", ".join(sorted(ALLOWED_UPLOAD_EXTENSIONS))
+        return {
+            "filename": filename,
+            "status": "error",
+            "detail": f"File type '{ext or '(none)'}' is not allowed. Allowed: {allowed}",
+        }
+    if len(raw) > MAX_UPLOAD_SIZE_BYTES:
+        return {
+            "filename": filename,
+            "status": "error",
+            "detail": f"File is {len(raw) / 1024 / 1024:.1f}MB, exceeds the {MAX_UPLOAD_SIZE_BYTES / 1024 / 1024:.0f}MB limit",
+        }
+
     text = extract_text(filename, raw)
     if not text.strip():
         return {"filename": filename, "status": "error", "detail": "No extractable text in document"}

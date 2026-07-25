@@ -46,5 +46,19 @@ DEFAULT_TOP_K = int(os.getenv("TOP_K", "8"))
 # leaves at least 1 core free.
 EMBEDDING_THREADS = int(os.getenv("EMBEDDING_THREADS", str(max(1, cpu_count() - 1))))
 
+# Only file types extract_text() genuinely knows how to handle. Anything else (pptx, docx, xlsx,
+# zip, images, ...) is binary and would otherwise get blindly decoded as text ("errors=ignore"),
+# producing huge garbage content that still gets chunked/embedded — wasting resources and, for
+# large binary files, capable of spiking memory/CPU hard enough to make the whole thing crawl.
+ALLOWED_UPLOAD_EXTENSIONS = {
+    ext.strip().lower()
+    for ext in os.getenv("ALLOWED_UPLOAD_EXTENSIONS", ".pdf,.txt,.md,.csv,.json,.log").split(",")
+    if ext.strip()
+}
+
+# Hard cap per uploaded file. A single oversized file (accidental wrong upload, huge scanned PDF,
+# etc.) shouldn't be able to balloon memory/CPU usage during extraction+embedding.
+MAX_UPLOAD_SIZE_BYTES = int(os.getenv("MAX_UPLOAD_SIZE_MB", "50")) * 1024 * 1024
+
 Path(UPLOAD_DIR).mkdir(parents=True, exist_ok=True)
 Path(SQLITE_PATH).parent.mkdir(parents=True, exist_ok=True)
