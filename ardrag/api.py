@@ -426,7 +426,11 @@ def update_settings(
     # If the *effective* provider (new value, or the existing one if not being changed this call)
     # is "api", validate it with a live test call before persisting anything — measures the real
     # vector dimension (Qdrant needs an exact size up front) and catches a bad key/URL/model
-    # immediately rather than silently breaking search/ingestion later.
+    # immediately rather than silently breaking search/ingestion later. Only actually re-probe
+    # when the embedding config itself changed (or has never been validated yet) — otherwise an
+    # unrelated save (e.g. just the classification key) would needlessly cost an API call, and
+    # would fail outright if the embedding provider happened to be down at that moment even
+    # though nothing about it was being touched.
     effective_provider = embedding_provider or old_settings.embedding_provider
     embedding_api_dimension = None
     if effective_provider == "api":
@@ -437,12 +441,20 @@ def update_settings(
             raise HTTPException(
                 status_code=400, detail="Base URL, API key, and model are all required for API embedding"
             )
-        try:
-            embedding_api_dimension = core.probe_api_embedding_dimension(
-                effective_base_url, effective_api_key, effective_model
-            )
-        except Exception as e:
-            raise HTTPException(status_code=400, detail=f"Could not validate API embedding config: {e}")
+        embedding_config_changed = (
+            old_settings.embedding_provider != "api"
+            or effective_base_url != old_settings.embedding_api_base_url
+            or effective_api_key != old_settings.embedding_api_key
+            or effective_model != old_settings.embedding_api_model
+            or not old_settings.embedding_api_dimension
+        )
+        if embedding_config_changed:
+            try:
+                embedding_api_dimension = core.probe_api_embedding_dimension(
+                    effective_base_url, effective_api_key, effective_model
+                )
+            except Exception as e:
+                raise HTTPException(status_code=400, detail=f"Could not validate API embedding config: {e}")
 
     settings = db.update_settings(
         chunk_size=chunk_size,
