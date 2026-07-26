@@ -178,17 +178,11 @@
   .mcp-users-table { width: 100%; border-collapse: collapse; font-size: 0.82rem; margin-bottom: 8px; }
   .mcp-users-table td { padding: 6px 4px; border-bottom: 1px solid var(--border); }
 
-  /* Settings tab: card grid instead of full-width stacked panels, so the page doesn't leave a
-     huge empty gutter on wide screens. Two narrower panels sit side by side; the MCP panel (more
-     content: toggles + users table) spans the full row underneath. */
-  #tab-settings {
-    display: grid; grid-template-columns: repeat(auto-fit, minmax(380px, 1fr));
-    gap: 18px; max-width: 1200px; margin: 0 auto; align-items: start;
-  }
-  #tab-settings .panel { margin-bottom: 0; }
+  /* Settings tab: single centered column (not full-width stacked from the page edge, but not a
+     wide multi-column grid either) — panels stack vertically same as before, just centered with
+     a comfortable max-width instead of hugging the left edge. */
+  #tab-settings { max-width: 640px; margin: 0 auto; }
   #tab-settings .settings-form { max-width: none; }
-  #tab-settings .panel:has(#mcp-sse-enabled) { grid-column: 1 / -1; }
-  #tab-settings .panel:has(#mcp-sse-enabled) .settings-form { max-width: 640px; margin: 0 auto; }
 
   .tag-input-box {
     display: flex; flex-wrap: wrap; gap: 5px; align-items: center;
