@@ -226,6 +226,16 @@ def embed_sparse(texts: list[str]) -> list[qmodels.SparseVector]:
     ]
 
 
+# Chunks are embedded and upserted this many at a time, not all at once — a document with many
+# chunks (a large/dense manual can easily produce 1000+) would otherwise hold every chunk's dense
+# + sparse vectors in memory simultaneously during embedding, before a single Qdrant upsert. That
+# alone (independent of any API request-size limit) was enough to push the whole container's
+# memory usage from ~360MiB to 98%+ of its 3GiB limit and crash it on a ~1800-chunk synthetic
+# document — the crash happened during embedding, not during the (already-batched) upsert call.
+# Processing in bounded groups keeps peak memory roughly constant regardless of document size.
+INDEX_BATCH_SIZE = 100
+
+
 def delete_document_chunks(doc_name: str) -> None:
     _client.delete(
         collection_name=QDRANT_COLLECTION,
@@ -258,23 +268,29 @@ def index_document(doc_name: str, text: str) -> int:
             for piece in _split_to_fit(doc_name, chunk, settings, settings.max_embedding_tokens)
         ]
 
-    # Prepend the document name to what gets embedded (not to the stored/returned text) so the
-    # product/file identity contributes to the vector — this matters a lot when many documents
-    # describe near-identical products and only differ by model name.
-    embed_inputs = [f"{doc_name}\n\n{chunk}" for chunk in chunks]
-    dense_vectors = embed_texts(embed_inputs, settings)
-    sparse_vectors = embed_sparse(embed_inputs)
+    total_points = 0
+    for batch_start in range(0, len(chunks), INDEX_BATCH_SIZE):
+        batch_chunks = chunks[batch_start : batch_start + INDEX_BATCH_SIZE]
 
-    points = [
-        qmodels.PointStruct(
-            id=str(uuid.uuid4()),
-            vector={DENSE_VECTOR_NAME: dense_vec, SPARSE_VECTOR_NAME: sparse_vec},
-            payload={"doc_name": doc_name, "text": chunk, "chunk_index": i},
-        )
-        for i, (chunk, dense_vec, sparse_vec) in enumerate(zip(chunks, dense_vectors, sparse_vectors))
-    ]
-    _client.upsert(collection_name=QDRANT_COLLECTION, points=points)
-    return len(points)
+        # Prepend the document name to what gets embedded (not to the stored/returned text) so
+        # the product/file identity contributes to the vector — this matters a lot when many
+        # documents describe near-identical products and only differ by model name.
+        embed_inputs = [f"{doc_name}\n\n{chunk}" for chunk in batch_chunks]
+        dense_vectors = embed_texts(embed_inputs, settings)
+        sparse_vectors = embed_sparse(embed_inputs)
+
+        points = [
+            qmodels.PointStruct(
+                id=str(uuid.uuid4()),
+                vector={DENSE_VECTOR_NAME: dense_vec, SPARSE_VECTOR_NAME: sparse_vec},
+                payload={"doc_name": doc_name, "text": chunk, "chunk_index": batch_start + i},
+            )
+            for i, (chunk, dense_vec, sparse_vec) in enumerate(zip(batch_chunks, dense_vectors, sparse_vectors))
+        ]
+        _client.upsert(collection_name=QDRANT_COLLECTION, points=points)
+        total_points += len(points)
+
+    return total_points
 
 
 def search(
