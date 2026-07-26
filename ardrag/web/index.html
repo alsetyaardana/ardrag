@@ -183,6 +183,13 @@
   #status { margin-bottom: 12px; font-size: 0.85rem; min-height: 1.2em; }
 
   .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 14px; margin-bottom: 22px; }
+  /* Health strip stays a single row regardless of card count/viewport width — scrolls
+     horizontally instead of wrapping, since a card wrapping alone onto its own row (e.g. just
+     "Classification model") reads as a layout bug rather than an intentional second row. */
+  #health-cards {
+    grid-template-columns: none; grid-auto-flow: column; grid-auto-columns: minmax(150px, 1fr);
+    overflow-x: auto; padding-bottom: 6px;
+  }
   .card {
     border: 1px solid var(--border); border-radius: var(--radius); padding: 16px;
     background: var(--surface); box-shadow: var(--shadow);
