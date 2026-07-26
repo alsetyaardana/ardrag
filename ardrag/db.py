@@ -65,6 +65,13 @@ class Settings(SQLModel, table=True):
     # 512 matches all 4 curated local models' actual limit; API providers often allow far more
     # (e.g. 8191 for OpenAI) — edit this after switching. 0 disables the check entirely.
     max_embedding_tokens: int = Field(default=512)
+    # Separate from max_embedding_tokens above: some OpenAI-compatible gateways (observed with a
+    # self-hosted litellm proxy) additionally cap the *combined* token count across every input in
+    # a single embeddings.create call, independent of any one input's own size — e.g. "300000
+    # tokens per request" even though each individual chunk is well under max_embedding_tokens.
+    # core.py batches API embedding calls to stay under this. Only relevant for embedding_provider
+    # == "api"; ignored for local (FastEmbed batches in-process with no such limit).
+    embedding_api_batch_token_limit: int = Field(default=250000)
     # Classification API base URL — generalizes deepseek_api_key/deepseek_model above (kept as-is
     # to avoid a data migration) into a full generic OpenAI-compatible endpoint. Defaults to
     # DeepSeek's URL for continuity but is fully user-editable.
@@ -237,6 +244,8 @@ def _migrate_ai_config_columns() -> None:
             conn.execute(text("ALTER TABLE settings ADD COLUMN classify_base_url VARCHAR DEFAULT 'https://api.deepseek.com'"))
         if "max_embedding_tokens" not in cols:
             conn.execute(text("ALTER TABLE settings ADD COLUMN max_embedding_tokens INTEGER DEFAULT 512"))
+        if "embedding_api_batch_token_limit" not in cols:
+            conn.execute(text("ALTER TABLE settings ADD COLUMN embedding_api_batch_token_limit INTEGER DEFAULT 250000"))
         conn.commit()
 
 

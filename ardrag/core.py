@@ -168,11 +168,43 @@ def _split_to_fit(doc_name: str, chunk: str, settings: "db.Settings", max_tokens
         pieces = new_pieces
 
 
+def _embed_texts_api(texts: list[str], settings: "db.Settings") -> list[list[float]]:
+    """Sends texts to the configured API embedding endpoint, splitting into multiple requests so
+    the *combined* token count of any single request stays under
+    settings.embedding_api_batch_token_limit — some OpenAI-compatible gateways cap this
+    independently of any one input's own size (a document with many chunks, each individually
+    within max_embedding_tokens, can still add up to more than one request is allowed to carry)."""
+    client = OpenAI(base_url=settings.embedding_api_base_url, api_key=settings.embedding_api_key)
+    batch_limit = settings.embedding_api_batch_token_limit or 250_000
+
+    vectors: list[list[float]] = []
+    batch: list[str] = []
+    batch_tokens = 0
+
+    def flush():
+        nonlocal batch, batch_tokens
+        if not batch:
+            return
+        response = client.embeddings.create(model=settings.embedding_api_model, input=batch)
+        vectors.extend(d.embedding for d in response.data)
+        batch = []
+        batch_tokens = 0
+
+    for text in texts:
+        text_tokens = count_tokens(text, settings)
+        # A batch always gets at least one item, even if that one item alone exceeds the limit —
+        # there's nothing more to do at this point (per-input size is max_embedding_tokens' job).
+        if batch and batch_tokens + text_tokens > batch_limit:
+            flush()
+        batch.append(text)
+        batch_tokens += text_tokens
+    flush()
+    return vectors
+
+
 def embed_texts(texts: list[str], settings: "db.Settings") -> list[list[float]]:
     if settings.embedding_provider == "api":
-        client = OpenAI(base_url=settings.embedding_api_base_url, api_key=settings.embedding_api_key)
-        response = client.embeddings.create(model=settings.embedding_api_model, input=texts)
-        return [d.embedding for d in response.data]
+        return _embed_texts_api(texts, settings)
     embedder = _get_embedder(settings.embedding_model)
     return [vec.tolist() for vec in embedder.embed(texts)]
 

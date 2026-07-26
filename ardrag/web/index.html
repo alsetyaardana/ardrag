@@ -519,6 +519,11 @@
               </div>
               <p class="muted" id="embedding-api-key-status"></p>
               <p class="muted" id="embedding-api-dimension-note"></p>
+              <label>
+                Max tokens per request (batch)
+                <input type="text" id="embedding-api-batch-limit-input" placeholder="250000" />
+              </label>
+              <p class="muted">Some gateways cap the combined token count across a whole batch, separately from the per-chunk limit above (e.g. a document with many chunks can add up past this even if each chunk alone is fine) — documents are sent to the embedding API in multiple requests to stay under it.</p>
             </div>
 
             <div class="row">
@@ -1154,6 +1159,7 @@
       document.getElementById('embedding-api-dimension-note').textContent = cur.embedding_api_dimension
         ? `Detected vector dimension: ${cur.embedding_api_dimension}.`
         : '';
+      document.getElementById('embedding-api-batch-limit-input').value = cur.embedding_api_batch_token_limit;
       updateEmbeddingProviderFields();
 
       document.getElementById('classify-base-url-input').value = cur.classify_base_url || 'https://api.deepseek.com';
@@ -1179,6 +1185,7 @@
         fd.append('embedding_api_model', document.getElementById('embedding-api-model-input').value.trim());
         const embKey = document.getElementById('embedding-api-key-input').value.trim();
         if (embKey) fd.append('embedding_api_key', embKey);
+        fd.append('embedding_api_batch_token_limit', document.getElementById('embedding-api-batch-limit-input').value);
       }
 
       fd.append('classify_base_url', document.getElementById('classify-base-url-input').value.trim() || 'https://api.deepseek.com');
