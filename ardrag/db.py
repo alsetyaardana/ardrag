@@ -49,6 +49,19 @@ class Settings(SQLModel, table=True):
     chunk_overlap: int = Field(default=DEFAULT_CHUNK_OVERLAP)
     deepseek_api_key: str = Field(default="")
     deepseek_model: str = Field(default="deepseek-chat")
+    # Embedding provider — "local" (FastEmbed, embedding_model above picks which) or "api"
+    # (generic OpenAI-compatible embeddings endpoint). embedding_api_dimension is never
+    # user-entered — it's measured server-side from a live test call when the API config is
+    # saved (see POST /settings), since Qdrant needs an exact vector size up front.
+    embedding_provider: str = Field(default="local")
+    embedding_api_base_url: str = Field(default="")
+    embedding_api_key: str = Field(default="")
+    embedding_api_model: str = Field(default="")
+    embedding_api_dimension: int = Field(default=0)
+    # Classification API base URL — generalizes deepseek_api_key/deepseek_model above (kept as-is
+    # to avoid a data migration) into a full generic OpenAI-compatible endpoint. Defaults to
+    # DeepSeek's URL for continuity but is fully user-editable.
+    classify_base_url: str = Field(default="https://api.deepseek.com")
     # MCP server settings — GUI-configurable, source of truth after first-boot migration seeds
     # them from the legacy .env-only MCP_OAUTH_ENABLED/MCP_PUBLIC_URL values.
     mcp_sse_enabled: bool = Field(default=True)
@@ -200,12 +213,31 @@ def _migrate_mcp_settings_columns() -> None:
         conn.commit()
 
 
+def _migrate_ai_config_columns() -> None:
+    with _engine.connect() as conn:
+        cols = {row[1] for row in conn.execute(text("PRAGMA table_info(settings)"))}
+        if "embedding_provider" not in cols:
+            conn.execute(text("ALTER TABLE settings ADD COLUMN embedding_provider VARCHAR DEFAULT 'local'"))
+        if "embedding_api_base_url" not in cols:
+            conn.execute(text("ALTER TABLE settings ADD COLUMN embedding_api_base_url VARCHAR DEFAULT ''"))
+        if "embedding_api_key" not in cols:
+            conn.execute(text("ALTER TABLE settings ADD COLUMN embedding_api_key VARCHAR DEFAULT ''"))
+        if "embedding_api_model" not in cols:
+            conn.execute(text("ALTER TABLE settings ADD COLUMN embedding_api_model VARCHAR DEFAULT ''"))
+        if "embedding_api_dimension" not in cols:
+            conn.execute(text("ALTER TABLE settings ADD COLUMN embedding_api_dimension INTEGER DEFAULT 0"))
+        if "classify_base_url" not in cols:
+            conn.execute(text("ALTER TABLE settings ADD COLUMN classify_base_url VARCHAR DEFAULT 'https://api.deepseek.com'"))
+        conn.commit()
+
+
 def init_db() -> None:
     SQLModel.metadata.create_all(_engine)
     _migrate_document_columns()
     _migrate_settings_columns()
     _migrate_oauth_columns()
     _migrate_mcp_settings_columns()
+    _migrate_ai_config_columns()
     with Session(_engine) as session:
         if not session.get(Settings, 1):
             session.add(Settings(id=1))

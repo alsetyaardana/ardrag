@@ -2,6 +2,7 @@ import hashlib
 import uuid
 
 from fastembed import SparseTextEmbedding, TextEmbedding
+from openai import OpenAI
 from qdrant_client import QdrantClient
 from qdrant_client.http import models as qmodels
 from qdrant_client.http.exceptions import UnexpectedResponse
@@ -41,10 +42,23 @@ def _get_sparse_embedder() -> SparseTextEmbedding:
     return _sparse_embedder
 
 
-def vector_size_for(model_name: str) -> int:
-    if model_name not in SUPPORTED_EMBEDDING_MODELS:
-        raise ValueError(f"Unsupported embedding model: {model_name}")
-    return SUPPORTED_EMBEDDING_MODELS[model_name]
+def vector_size_for(settings: "db.Settings") -> int:
+    if settings.embedding_provider == "api":
+        if not settings.embedding_api_dimension:
+            raise ValueError("API embedding provider has no measured dimension — save it in Settings first.")
+        return settings.embedding_api_dimension
+    if settings.embedding_model not in SUPPORTED_EMBEDDING_MODELS:
+        raise ValueError(f"Unsupported embedding model: {settings.embedding_model}")
+    return SUPPORTED_EMBEDDING_MODELS[settings.embedding_model]
+
+
+def probe_api_embedding_dimension(base_url: str, api_key: str, model: str) -> int:
+    """Makes one live test call to an OpenAI-compatible embeddings endpoint and returns the
+    vector length — used to validate a new API embedding config and auto-detect its dimension
+    (Qdrant needs an exact size up front; asking the user to know/enter it isn't necessary)."""
+    client = OpenAI(base_url=base_url, api_key=api_key)
+    response = client.embeddings.create(model=model, input=["dimension probe"])
+    return len(response.data[0].embedding)
 
 
 def _vectors_config(vector_size: int):
@@ -57,7 +71,7 @@ def _sparse_vectors_config():
 
 def ensure_collection() -> None:
     settings = db.get_settings()
-    vector_size = vector_size_for(settings.embedding_model)
+    vector_size = vector_size_for(settings)
     if _client.collection_exists(QDRANT_COLLECTION):
         return
     try:
@@ -71,10 +85,10 @@ def ensure_collection() -> None:
             raise
 
 
-def recreate_collection_for_model(model_name: str) -> None:
-    """Drop and recreate the collection with the vector size required by model_name.
-    Destroys all existing vectors — caller is expected to trigger a reindex afterwards."""
-    vector_size = vector_size_for(model_name)
+def recreate_collection_for_model(settings: "db.Settings") -> None:
+    """Drop and recreate the collection with the vector size required by the current embedding
+    config. Destroys all existing vectors — caller is expected to trigger a reindex afterwards."""
+    vector_size = vector_size_for(settings)
     if _client.collection_exists(QDRANT_COLLECTION):
         _client.delete_collection(QDRANT_COLLECTION)
     _client.create_collection(
@@ -103,8 +117,12 @@ def chunk_text(text: str, size: int, overlap: int) -> list[str]:
     return chunks
 
 
-def embed_texts(texts: list[str], model_name: str) -> list[list[float]]:
-    embedder = _get_embedder(model_name)
+def embed_texts(texts: list[str], settings: "db.Settings") -> list[list[float]]:
+    if settings.embedding_provider == "api":
+        client = OpenAI(base_url=settings.embedding_api_base_url, api_key=settings.embedding_api_key)
+        response = client.embeddings.create(model=settings.embedding_api_model, input=texts)
+        return [d.embedding for d in response.data]
+    embedder = _get_embedder(settings.embedding_model)
     return [vec.tolist() for vec in embedder.embed(texts)]
 
 
@@ -140,7 +158,7 @@ def index_document(doc_name: str, text: str) -> int:
     # product/file identity contributes to the vector — this matters a lot when many documents
     # describe near-identical products and only differ by model name.
     embed_inputs = [f"{doc_name}\n\n{chunk}" for chunk in chunks]
-    dense_vectors = embed_texts(embed_inputs, settings.embedding_model)
+    dense_vectors = embed_texts(embed_inputs, settings)
     sparse_vectors = embed_sparse(embed_inputs)
 
     points = [
@@ -164,7 +182,7 @@ def search(
 ) -> list[dict]:
     ensure_collection()
     settings = db.get_settings()
-    dense_query = embed_texts([query], settings.embedding_model)[0]
+    dense_query = embed_texts([query], settings)[0]
     sparse_query = embed_sparse([query])[0]
 
     # Vendor/doc_type/tag aren't stored in Qdrant's payload (only doc_name/text/chunk_index are),

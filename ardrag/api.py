@@ -364,7 +364,7 @@ def health(_: str = AuthDep):
         "reindex": reindex_mod.get_status(),
         "batch_upload": _batch_status,
         "mcp_usage": db.get_mcp_usage_summary(),
-        "deepseek_usage": db.get_deepseek_usage_summary(),
+        "classify_usage": db.get_deepseek_usage_summary(),
         "classify": classify_job.get_status(),
     }
 
@@ -372,12 +372,26 @@ def health(_: str = AuthDep):
 def _serialize_settings(settings: db.Settings) -> dict:
     return {
         "id": settings.id,
-        "embedding_model": settings.embedding_model,
         "chunk_size": settings.chunk_size,
         "chunk_overlap": settings.chunk_overlap,
+        "embedding_provider": settings.embedding_provider,
+        "embedding_model": settings.embedding_model,
+        "embedding_api_base_url": settings.embedding_api_base_url,
+        "embedding_api_model": settings.embedding_api_model,
+        "embedding_api_key_set": bool(settings.embedding_api_key),
+        "embedding_api_dimension": settings.embedding_api_dimension,
+        "classify_base_url": settings.classify_base_url,
         "deepseek_model": settings.deepseek_model,
         "deepseek_api_key_set": bool(settings.deepseek_api_key),
     }
+
+
+def _embedding_identity(settings: db.Settings) -> tuple:
+    """The effective embedding config — used to decide whether a settings save changed anything
+    that would make existing vectors stale (and therefore require a reindex)."""
+    if settings.embedding_provider == "api":
+        return ("api", settings.embedding_api_base_url, settings.embedding_api_model, settings.embedding_api_dimension)
+    return ("local", settings.embedding_model)
 
 
 @app.get("/settings")
@@ -390,27 +404,65 @@ def get_settings(_: str = AuthDep):
 
 @app.post("/settings")
 def update_settings(
-    embedding_model: Optional[str] = Form(None),
     chunk_size: Optional[int] = Form(None),
     chunk_overlap: Optional[int] = Form(None),
+    embedding_provider: Optional[str] = Form(None),
+    embedding_model: Optional[str] = Form(None),
+    embedding_api_base_url: Optional[str] = Form(None),
+    embedding_api_key: Optional[str] = Form(None),
+    embedding_api_model: Optional[str] = Form(None),
+    classify_base_url: Optional[str] = Form(None),
     deepseek_api_key: Optional[str] = Form(None),
     deepseek_model: Optional[str] = Form(None),
     _: str = AuthDep,
 ):
+    old_settings = db.get_settings()
+
+    if embedding_provider and embedding_provider not in ("local", "api"):
+        raise HTTPException(status_code=400, detail="embedding_provider must be 'local' or 'api'")
     if embedding_model and embedding_model not in SUPPORTED_EMBEDDING_MODELS:
         raise HTTPException(status_code=400, detail=f"Unsupported model: {embedding_model}")
-    model_changed = embedding_model and embedding_model != db.get_settings().embedding_model
+
+    # If the *effective* provider (new value, or the existing one if not being changed this call)
+    # is "api", validate it with a live test call before persisting anything — measures the real
+    # vector dimension (Qdrant needs an exact size up front) and catches a bad key/URL/model
+    # immediately rather than silently breaking search/ingestion later.
+    effective_provider = embedding_provider or old_settings.embedding_provider
+    embedding_api_dimension = None
+    if effective_provider == "api":
+        effective_base_url = embedding_api_base_url or old_settings.embedding_api_base_url
+        effective_api_key = embedding_api_key or old_settings.embedding_api_key
+        effective_model = embedding_api_model or old_settings.embedding_api_model
+        if not (effective_base_url and effective_api_key and effective_model):
+            raise HTTPException(
+                status_code=400, detail="Base URL, API key, and model are all required for API embedding"
+            )
+        try:
+            embedding_api_dimension = core.probe_api_embedding_dimension(
+                effective_base_url, effective_api_key, effective_model
+            )
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Could not validate API embedding config: {e}")
+
     settings = db.update_settings(
-        embedding_model=embedding_model,
         chunk_size=chunk_size,
         chunk_overlap=chunk_overlap,
+        embedding_provider=embedding_provider,
+        embedding_model=embedding_model,
+        embedding_api_base_url=embedding_api_base_url,
+        embedding_api_key=embedding_api_key or None,
+        embedding_api_model=embedding_api_model,
+        embedding_api_dimension=embedding_api_dimension,
+        classify_base_url=classify_base_url,
         deepseek_api_key=deepseek_api_key or None,
         deepseek_model=deepseek_model,
     )
+
+    reindex_required = _embedding_identity(old_settings) != _embedding_identity(settings)
     return {
         "settings": _serialize_settings(settings),
-        "model_changed": bool(model_changed),
-        "reindex_required": bool(model_changed),
+        "model_changed": reindex_required,
+        "reindex_required": reindex_required,
     }
 
 

@@ -194,8 +194,10 @@
 
   .settings-form { display: flex; flex-direction: column; gap: 12px; max-width: 460px; }
   .settings-form label { font-size: 0.82rem; font-weight: 500; display: flex; flex-direction: column; gap: 5px; }
-  .settings-form label:has(input[type="checkbox"]) { flex-direction: row; align-items: center; gap: 8px; font-weight: 400; }
-  .settings-form label:has(input[type="checkbox"]) input { width: auto; }
+  .settings-form label:has(input[type="checkbox"]), .settings-form label:has(input[type="radio"]) {
+    flex-direction: row; align-items: center; gap: 8px; font-weight: 400;
+  }
+  .settings-form label:has(input[type="checkbox"]) input, .settings-form label:has(input[type="radio"]) input { width: auto; }
   .row { display: flex; gap: 10px; }
   .row > * { flex: 1; }
   .section-divider { border: none; border-top: 1px solid var(--border); margin: 20px 0; }
@@ -443,20 +445,74 @@
         </div>
 
         <div class="panel">
-          <h3>DeepSeek Token Usage (Classification)</h3>
+          <h3>AI Classification</h3>
+          <p class="muted">Auto-detect vendor, doc type, and tags from document content, via the API configured in Settings &gt; AI Configuration.</p>
           <div class="cards" id="deepseek-usage-cards"></div>
           <p class="muted" style="margin-top:10px;">Tokens per hour (last 24h)</p>
           <div class="bar-chart hourly" id="deepseek-hourly-chart"></div>
+
+          <hr class="section-divider" />
+
+          <div class="row">
+            <label>
+              Classify scope
+              <select id="classify-scope-select">
+                <option value="all">All documents</option>
+                <option value="uncategorized">Only Uncategorized / General</option>
+              </select>
+            </label>
+          </div>
+          <button class="secondary" id="classify-btn" type="button">Reclassify</button>
+          <div class="progress-wrap" id="classify-progress-wrap">
+            <div class="progress-bar-track"><div class="progress-bar-fill" id="classify-progress-fill"></div></div>
+            <div class="progress-label">
+              <span id="classify-progress-current">—</span>
+              <span id="classify-progress-count">0 / 0</span>
+            </div>
+          </div>
+          <div id="classify-status" class="muted"></div>
         </div>
       </section>
 
       <section class="tab" id="tab-settings">
         <div class="panel">
           <div class="settings-form">
-            <label>
-              Embedding model
-              <select id="model-select"></select>
-            </label>
+            <h3>AI Configuration</h3>
+            <p class="muted">Embedding (for search) and classification (auto vendor/type/tag detection) model config — no .env editing needed.</p>
+
+            <h4>Embedding</h4>
+            <div class="row">
+              <label><input type="radio" name="embedding-provider" id="embedding-provider-local" value="local" /> Local (FastEmbed)</label>
+              <label><input type="radio" name="embedding-provider" id="embedding-provider-api" value="api" /> API (OpenAI-compatible)</label>
+            </div>
+
+            <div id="embedding-local-fields">
+              <label>
+                Embedding model
+                <select id="model-select"></select>
+              </label>
+              <p class="muted" id="settings-note"></p>
+            </div>
+
+            <div id="embedding-api-fields" style="display:none;">
+              <label>
+                Base URL
+                <input type="text" id="embedding-api-base-url-input" placeholder="https://api.openai.com/v1" />
+              </label>
+              <div class="row">
+                <label>
+                  API key
+                  <input type="password" id="embedding-api-key-input" placeholder="sk-..." autocomplete="new-password" />
+                </label>
+                <label>
+                  Model
+                  <input type="text" id="embedding-api-model-input" placeholder="text-embedding-3-small" />
+                </label>
+              </div>
+              <p class="muted" id="embedding-api-key-status"></p>
+              <p class="muted" id="embedding-api-dimension-note"></p>
+            </div>
+
             <div class="row">
               <label>
                 Chunk size (chars)
@@ -467,50 +523,31 @@
                 <input type="text" id="chunk-overlap-input" />
               </label>
             </div>
-            <p class="muted" id="settings-note"></p>
-            <div class="row">
-              <button class="primary" id="save-settings-btn" type="button">Save settings</button>
-              <button class="secondary" id="reindex-btn" type="button">Reindex all documents</button>
-            </div>
-            <div id="settings-status" class="muted"></div>
-          </div>
-        </div>
-
-        <div class="panel">
-          <div class="settings-form">
-            <h3>AI Classification (DeepSeek)</h3>
-            <p class="muted">Auto-detect vendor, doc type, and tags from document content.</p>
-            <label>
-              DeepSeek API key
-              <input type="password" id="deepseek-key-input" placeholder="sk-..." autocomplete="new-password" />
-            </label>
-            <p class="muted" id="deepseek-key-status"></p>
-            <label>
-              DeepSeek model
-              <input type="text" id="deepseek-model-input" placeholder="deepseek-chat" />
-            </label>
-            <button class="primary" id="save-deepseek-btn" type="button">Save DeepSeek settings</button>
 
             <hr class="section-divider" />
 
+            <h4>Classification (API)</h4>
+            <label>
+              Base URL
+              <input type="text" id="classify-base-url-input" placeholder="https://api.deepseek.com" />
+            </label>
             <div class="row">
               <label>
-                Classify scope
-                <select id="classify-scope-select">
-                  <option value="all">All documents</option>
-                  <option value="uncategorized">Only Uncategorized / General</option>
-                </select>
+                API key
+                <input type="password" id="deepseek-key-input" placeholder="sk-..." autocomplete="new-password" />
+              </label>
+              <label>
+                Model
+                <input type="text" id="deepseek-model-input" placeholder="deepseek-chat" />
               </label>
             </div>
-            <button class="secondary" id="classify-btn" type="button">AI Classify documents</button>
-            <div class="progress-wrap" id="classify-progress-wrap">
-              <div class="progress-bar-track"><div class="progress-bar-fill" id="classify-progress-fill"></div></div>
-              <div class="progress-label">
-                <span id="classify-progress-current">—</span>
-                <span id="classify-progress-count">0 / 0</span>
-              </div>
+            <p class="muted" id="deepseek-key-status"></p>
+
+            <div class="row">
+              <button class="primary" id="save-settings-btn" type="button">Save AI Configuration</button>
+              <button class="secondary" id="reindex-btn" type="button">Reindex all documents</button>
             </div>
-            <div id="classify-status" class="muted"></div>
+            <div id="settings-status" class="muted"></div>
           </div>
         </div>
 
@@ -1049,7 +1086,7 @@
         renderHourlyChart('mcp-hourly-chart', mcp.hourly);
       }
 
-      const ds = h.deepseek_usage;
+      const ds = h.classify_usage;
       if (ds) {
         document.getElementById('deepseek-usage-cards').innerHTML = `
           <div class="card"><div class="label">Classify calls</div><div class="value">${ds.total_calls}</div></div>
@@ -1061,36 +1098,83 @@
       }
     }
 
-    // ---- settings ----
+    // ---- AI Configuration (embedding + classification) ----
+    function updateEmbeddingProviderFields() {
+      const apiMode = document.getElementById('embedding-provider-api').checked;
+      document.getElementById('embedding-local-fields').style.display = apiMode ? 'none' : '';
+      document.getElementById('embedding-api-fields').style.display = apiMode ? '' : 'none';
+    }
+    document.getElementById('embedding-provider-local').addEventListener('change', updateEmbeddingProviderFields);
+    document.getElementById('embedding-provider-api').addEventListener('change', updateEmbeddingProviderFields);
+
     async function loadSettings() {
       const res = await api('/settings');
       const data = await res.json();
+      const cur = data.current;
+
       const select = document.getElementById('model-select');
       select.innerHTML = Object.entries(data.available_models)
-        .map(([name, dim]) => `<option value="${name}" ${name === data.current.embedding_model ? 'selected' : ''}>${name} (dim ${dim})</option>`)
+        .map(([name, dim]) => `<option value="${name}" ${name === cur.embedding_model ? 'selected' : ''}>${name} (dim ${dim})</option>`)
         .join('');
-      document.getElementById('chunk-size-input').value = data.current.chunk_size;
-      document.getElementById('chunk-overlap-input').value = data.current.chunk_overlap;
+      document.getElementById('chunk-size-input').value = cur.chunk_size;
+      document.getElementById('chunk-overlap-input').value = cur.chunk_overlap;
       document.getElementById('settings-note').textContent =
-        'Changing the embedding model requires a full reindex (it recreates the vector collection). Changing chunk size/overlap only affects documents indexed after the change — run Reindex to apply retroactively.';
+        'Local models auto-embed on this machine (no API cost). Changing embedding provider/model requires a full reindex (it recreates the vector collection) — chunk size/overlap changes only affect documents indexed after the change, run Reindex to apply retroactively.';
 
-      document.getElementById('deepseek-model-input').value = data.current.deepseek_model || 'deepseek-chat';
-      document.getElementById('deepseek-key-status').textContent = data.current.deepseek_api_key_set
+      document.getElementById('embedding-provider-local').checked = cur.embedding_provider !== 'api';
+      document.getElementById('embedding-provider-api').checked = cur.embedding_provider === 'api';
+      document.getElementById('embedding-api-base-url-input').value = cur.embedding_api_base_url || '';
+      document.getElementById('embedding-api-model-input').value = cur.embedding_api_model || '';
+      document.getElementById('embedding-api-key-status').textContent = cur.embedding_api_key_set
         ? 'API key is set. Leave the field blank to keep it, or enter a new one to replace it.'
-        : 'No API key set yet — AI Classify will not work until you add one.';
+        : 'No API key set yet.';
+      document.getElementById('embedding-api-dimension-note').textContent = cur.embedding_api_dimension
+        ? `Detected vector dimension: ${cur.embedding_api_dimension}.`
+        : '';
+      updateEmbeddingProviderFields();
+
+      document.getElementById('classify-base-url-input').value = cur.classify_base_url || 'https://api.deepseek.com';
+      document.getElementById('deepseek-model-input').value = cur.deepseek_model || 'deepseek-chat';
+      document.getElementById('deepseek-key-status').textContent = cur.deepseek_api_key_set
+        ? 'API key is set. Leave the field blank to keep it, or enter a new one to replace it.'
+        : 'No API key set yet — Reclassify (on the Dashboard) will not work until you add one.';
     }
 
-    document.getElementById('save-deepseek-btn').addEventListener('click', async () => {
+    document.getElementById('save-settings-btn').addEventListener('click', async () => {
+      const statusEl = document.getElementById('settings-status');
       const fd = new FormData();
-      const key = document.getElementById('deepseek-key-input').value.trim();
-      if (key) fd.append('deepseek_api_key', key);
+      fd.append('chunk_size', document.getElementById('chunk-size-input').value);
+      fd.append('chunk_overlap', document.getElementById('chunk-overlap-input').value);
+
+      const provider = document.getElementById('embedding-provider-api').checked ? 'api' : 'local';
+      fd.append('embedding_provider', provider);
+      if (provider === 'local') {
+        fd.append('embedding_model', document.getElementById('model-select').value);
+      } else {
+        fd.append('embedding_api_base_url', document.getElementById('embedding-api-base-url-input').value.trim());
+        fd.append('embedding_api_model', document.getElementById('embedding-api-model-input').value.trim());
+        const embKey = document.getElementById('embedding-api-key-input').value.trim();
+        if (embKey) fd.append('embedding_api_key', embKey);
+      }
+
+      fd.append('classify_base_url', document.getElementById('classify-base-url-input').value.trim() || 'https://api.deepseek.com');
       fd.append('deepseek_model', document.getElementById('deepseek-model-input').value.trim() || 'deepseek-chat');
+      const classifyKey = document.getElementById('deepseek-key-input').value.trim();
+      if (classifyKey) fd.append('deepseek_api_key', classifyKey);
+
+      statusEl.textContent = provider === 'api' ? 'Saving and validating API embedding config...' : 'Saving...';
       const res = await api('/settings', { method: 'POST', body: fd });
       const data = await res.json();
+      if (!res.ok) {
+        statusEl.textContent = `Error: ${data.detail}`;
+        return;
+      }
+      document.getElementById('embedding-api-key-input').value = '';
       document.getElementById('deepseek-key-input').value = '';
-      document.getElementById('deepseek-key-status').textContent = data.settings.deepseek_api_key_set
-        ? 'Saved. API key is set.'
-        : 'Saved, but no API key is set yet.';
+      statusEl.textContent = data.reindex_required
+        ? 'Saved. Embedding config changed — click "Reindex all documents" to apply.'
+        : 'Saved.';
+      loadSettings();
     });
 
     // ---- AI classify backfill ----
@@ -1147,20 +1231,6 @@
       const s = await res.json();
       if (s.running) pollClassify();
     }
-
-    document.getElementById('save-settings-btn').addEventListener('click', async () => {
-      const fd = new FormData();
-      fd.append('embedding_model', document.getElementById('model-select').value);
-      fd.append('chunk_size', document.getElementById('chunk-size-input').value);
-      fd.append('chunk_overlap', document.getElementById('chunk-overlap-input').value);
-      const statusEl = document.getElementById('settings-status');
-      statusEl.textContent = 'Saving...';
-      const res = await api('/settings', { method: 'POST', body: fd });
-      const data = await res.json();
-      statusEl.textContent = data.reindex_required
-        ? 'Saved. Model changed — click "Reindex all documents" to apply.'
-        : 'Saved.';
-    });
 
     document.getElementById('reindex-btn').addEventListener('click', async () => {
       const statusEl = document.getElementById('settings-status');

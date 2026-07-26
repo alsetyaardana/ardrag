@@ -23,7 +23,7 @@ def reindex_all(recreate_collection: bool = False) -> dict:
     _status.update(running=True, total=0, done=0, current=None, errors=[])
     try:
         if recreate_collection:
-            core.recreate_collection_for_model(settings.embedding_model)
+            core.recreate_collection_for_model(settings)
         else:
             core.ensure_collection()
 

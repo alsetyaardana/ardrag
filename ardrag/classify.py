@@ -6,22 +6,22 @@ from openai import OpenAI
 
 from ardrag import db
 
-DEEPSEEK_BASE_URL = "https://api.deepseek.com"
 EXCERPT_CHARS = 3000
 MAX_ATTEMPTS = 3
 RETRY_BACKOFF_SECONDS = 2
 
-_client_cache: dict[str, OpenAI] = {}
+_client_cache: dict[tuple[str, str], OpenAI] = {}
 
 
 class ClassifyError(Exception):
     pass
 
 
-def _get_client(api_key: str) -> OpenAI:
-    if api_key not in _client_cache:
-        _client_cache[api_key] = OpenAI(api_key=api_key, base_url=DEEPSEEK_BASE_URL)
-    return _client_cache[api_key]
+def _get_client(api_key: str, base_url: str) -> OpenAI:
+    key = (base_url, api_key)
+    if key not in _client_cache:
+        _client_cache[key] = OpenAI(api_key=api_key, base_url=base_url)
+    return _client_cache[key]
 
 
 def _extract_json(raw: str) -> dict:
@@ -45,7 +45,7 @@ def _call_once(client: OpenAI, model: str, system_prompt: str, user_prompt: str)
             response_format={"type": "json_object"},
         )
     except Exception as e:
-        raise ClassifyError(f"DeepSeek API call failed: {e}") from e
+        raise ClassifyError(f"Classification API call failed: {e}") from e
 
     if response.usage:
         db.log_deepseek_usage(
@@ -55,25 +55,27 @@ def _call_once(client: OpenAI, model: str, system_prompt: str, user_prompt: str)
     choice = response.choices[0]
     raw = choice.message.content or ""
     if not raw.strip():
-        raise ClassifyError(f"Empty response from DeepSeek (finish_reason={choice.finish_reason})")
+        raise ClassifyError(f"Empty response from classification API (finish_reason={choice.finish_reason})")
     try:
         return _extract_json(raw)
     except (json.JSONDecodeError, ClassifyError) as e:
         raise ClassifyError(
-            f"Could not parse DeepSeek response as JSON (finish_reason={choice.finish_reason}): {e}"
+            f"Could not parse classification API response as JSON (finish_reason={choice.finish_reason}): {e}"
         ) from e
 
 
 def classify_document(filename: str, text: str) -> dict:
-    """Ask DeepSeek to infer {vendor, doc_type, tags} for a document.
+    """Ask the configured classification API (OpenAI-compatible; base URL/key/model set in
+    Settings, defaults to DeepSeek) to infer {vendor, doc_type, tags} for a document.
 
-    Raises ClassifyError if no API key is configured or all attempts fail. DeepSeek occasionally
-    returns an empty/truncated response for no discernible reason (observed even for a document
-    that succeeded on a prior identical call) — retried a couple of times before giving up.
+    Raises ClassifyError if no API key is configured or all attempts fail. Some providers (e.g.
+    DeepSeek) occasionally return an empty/truncated response for no discernible reason (observed
+    even for a document that succeeded on a prior identical call) — retried a couple of times
+    before giving up.
     """
     settings = db.get_settings()
     if not settings.deepseek_api_key:
-        raise ClassifyError("DeepSeek API key is not configured — set it in Settings first.")
+        raise ClassifyError("Classification API key is not configured — set it in Settings first.")
 
     known_vendors = sorted({f["vendor"] for f in db.list_folders()} - {db.UNCATEGORIZED_VENDOR})
     known_types = sorted({f["doc_type"] for f in db.list_folders()} - {db.UNCATEGORIZED_TYPE})
@@ -97,7 +99,7 @@ def classify_document(filename: str, text: str) -> dict:
     )
     user_prompt = f"Filename: {filename}\n\nText excerpt:\n{excerpt}"
 
-    client = _get_client(settings.deepseek_api_key)
+    client = _get_client(settings.deepseek_api_key, settings.classify_base_url)
 
     last_error: Exception | None = None
     for attempt in range(1, MAX_ATTEMPTS + 1):
