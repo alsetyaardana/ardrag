@@ -519,11 +519,17 @@
               </div>
               <p class="muted" id="embedding-api-key-status"></p>
               <p class="muted" id="embedding-api-dimension-note"></p>
-              <label>
-                Max tokens per request (batch)
-                <input type="text" id="embedding-api-batch-limit-input" placeholder="250000" />
-              </label>
-              <p class="muted">Some gateways cap the combined token count across a whole batch, separately from the per-chunk limit above (e.g. a document with many chunks can add up past this even if each chunk alone is fine) — documents are sent to the embedding API in multiple requests to stay under it.</p>
+              <div class="row">
+                <label>
+                  Max tokens per request (batch)
+                  <input type="text" id="embedding-api-batch-limit-input" placeholder="200000" />
+                </label>
+                <label>
+                  Max request size (bytes)
+                  <input type="text" id="embedding-api-batch-byte-limit-input" placeholder="25000000" />
+                </label>
+              </div>
+              <p class="muted">Some gateways cap the combined token count and/or raw request size across a whole batch, separately from the per-chunk limit above (e.g. a document with many chunks can add up past either even if each chunk alone is fine) — documents are sent to the embedding API in multiple requests to stay under both.</p>
             </div>
 
             <div class="row">
@@ -1160,6 +1166,7 @@
         ? `Detected vector dimension: ${cur.embedding_api_dimension}.`
         : '';
       document.getElementById('embedding-api-batch-limit-input').value = cur.embedding_api_batch_token_limit;
+      document.getElementById('embedding-api-batch-byte-limit-input').value = cur.embedding_api_batch_byte_limit;
       updateEmbeddingProviderFields();
 
       document.getElementById('classify-base-url-input').value = cur.classify_base_url || 'https://api.deepseek.com';
@@ -1186,6 +1193,7 @@
         const embKey = document.getElementById('embedding-api-key-input').value.trim();
         if (embKey) fd.append('embedding_api_key', embKey);
         fd.append('embedding_api_batch_token_limit', document.getElementById('embedding-api-batch-limit-input').value);
+        fd.append('embedding_api_batch_byte_limit', document.getElementById('embedding-api-batch-byte-limit-input').value);
       }
 
       fd.append('classify_base_url', document.getElementById('classify-base-url-input').value.trim() || 'https://api.deepseek.com');

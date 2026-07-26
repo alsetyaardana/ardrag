@@ -138,10 +138,13 @@ def chunk_text(text: str, size: int, overlap: int) -> list[str]:
 
 def count_tokens(text: str, settings: "db.Settings") -> int:
     """Real, untruncated token count via a dedicated clone of the active local model's tokenizer,
-    or a char/4 approximation for an API provider (no generic way to know an arbitrary
-    OpenAI-compatible endpoint's tokenizer)."""
+    or a char/3 approximation for an API provider (no generic way to know an arbitrary
+    OpenAI-compatible endpoint's tokenizer — char/3 rather than the more commonly quoted char/4
+    for English prose, since these are technical documents with lots of numbers/symbols/part
+    codes, which tends to tokenize less efficiently than plain prose; better to overestimate here
+    than let a batch through that a gateway's own, exact server-side count then rejects)."""
     if settings.embedding_provider == "api":
-        return max(1, len(text) // 4)
+        return max(1, len(text) // 3)
     return len(_get_counting_tokenizer(settings.embedding_model).encode(text).ids)
 
 
@@ -170,34 +173,40 @@ def _split_to_fit(doc_name: str, chunk: str, settings: "db.Settings", max_tokens
 
 def _embed_texts_api(texts: list[str], settings: "db.Settings") -> list[list[float]]:
     """Sends texts to the configured API embedding endpoint, splitting into multiple requests so
-    the *combined* token count of any single request stays under
-    settings.embedding_api_batch_token_limit — some OpenAI-compatible gateways cap this
-    independently of any one input's own size (a document with many chunks, each individually
-    within max_embedding_tokens, can still add up to more than one request is allowed to carry)."""
+    a single call stays under two independent gateway limits: combined token count
+    (embedding_api_batch_token_limit) and raw JSON body size in bytes
+    (embedding_api_batch_byte_limit) — some OpenAI-compatible gateways enforce both, separately
+    from any one input's own size (a document with many chunks, each individually within
+    max_embedding_tokens, can still add up past either limit)."""
     client = OpenAI(base_url=settings.embedding_api_base_url, api_key=settings.embedding_api_key)
-    batch_limit = settings.embedding_api_batch_token_limit or 250_000
+    token_limit = settings.embedding_api_batch_token_limit or 200_000
+    byte_limit = settings.embedding_api_batch_byte_limit or 25_000_000
 
     vectors: list[list[float]] = []
     batch: list[str] = []
     batch_tokens = 0
+    batch_bytes = 0
 
     def flush():
-        nonlocal batch, batch_tokens
+        nonlocal batch, batch_tokens, batch_bytes
         if not batch:
             return
         response = client.embeddings.create(model=settings.embedding_api_model, input=batch)
         vectors.extend(d.embedding for d in response.data)
         batch = []
         batch_tokens = 0
+        batch_bytes = 0
 
     for text in texts:
         text_tokens = count_tokens(text, settings)
-        # A batch always gets at least one item, even if that one item alone exceeds the limit —
+        text_bytes = len(text.encode("utf-8"))
+        # A batch always gets at least one item, even if that one item alone exceeds a limit —
         # there's nothing more to do at this point (per-input size is max_embedding_tokens' job).
-        if batch and batch_tokens + text_tokens > batch_limit:
+        if batch and (batch_tokens + text_tokens > token_limit or batch_bytes + text_bytes > byte_limit):
             flush()
         batch.append(text)
         batch_tokens += text_tokens
+        batch_bytes += text_bytes
     flush()
     return vectors
 

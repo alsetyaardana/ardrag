@@ -71,7 +71,12 @@ class Settings(SQLModel, table=True):
     # tokens per request" even though each individual chunk is well under max_embedding_tokens.
     # core.py batches API embedding calls to stay under this. Only relevant for embedding_provider
     # == "api"; ignored for local (FastEmbed batches in-process with no such limit).
-    embedding_api_batch_token_limit: int = Field(default=250000)
+    embedding_api_batch_token_limit: int = Field(default=200000)
+    # Some gateways separately cap the raw JSON request body size, independent of token count
+    # (observed: "JSON payload (42521863 bytes) is larger than allowed (limit: 33554432 bytes)"
+    # even on a request that stayed under the token-count limit above). Batches are flushed on
+    # whichever limit — token count or byte size — would be hit first.
+    embedding_api_batch_byte_limit: int = Field(default=25_000_000)
     # Classification API base URL — generalizes deepseek_api_key/deepseek_model above (kept as-is
     # to avoid a data migration) into a full generic OpenAI-compatible endpoint. Defaults to
     # DeepSeek's URL for continuity but is fully user-editable.
@@ -245,7 +250,9 @@ def _migrate_ai_config_columns() -> None:
         if "max_embedding_tokens" not in cols:
             conn.execute(text("ALTER TABLE settings ADD COLUMN max_embedding_tokens INTEGER DEFAULT 512"))
         if "embedding_api_batch_token_limit" not in cols:
-            conn.execute(text("ALTER TABLE settings ADD COLUMN embedding_api_batch_token_limit INTEGER DEFAULT 250000"))
+            conn.execute(text("ALTER TABLE settings ADD COLUMN embedding_api_batch_token_limit INTEGER DEFAULT 200000"))
+        if "embedding_api_batch_byte_limit" not in cols:
+            conn.execute(text("ALTER TABLE settings ADD COLUMN embedding_api_batch_byte_limit INTEGER DEFAULT 25000000"))
         conn.commit()
 
 
