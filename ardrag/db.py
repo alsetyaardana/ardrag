@@ -69,6 +69,19 @@ class McpUser(SQLModel, table=True):
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
+class McpApiToken(SQLModel, table=True):
+    """Long-lived, non-expiring Bearer tokens generated directly (no interactive OAuth
+    authorize/login redirect) for MCP clients that can't do a browser-based OAuth flow — e.g.
+    AnythingLLM, which only supports a static token pasted into a config file's `headers` field.
+    Validated by the same code path as regular OAuth access tokens (see
+    ArdragOAuthProvider.load_access_token in oauth_provider.py)."""
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    token: str = Field(unique=True, index=True)
+    label: str
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
 class McpCallLog(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     tool_name: str = Field(index=True)
@@ -657,3 +670,34 @@ def mcp_user_delete(user_id: int) -> Optional[McpUser]:
             session.delete(user)
             session.commit()
         return user
+
+
+# ---- MCP static API tokens (for clients that can't do the OAuth browser redirect) ----
+
+
+def mcp_api_token_create(label: str) -> McpApiToken:
+    with Session(_engine) as session:
+        token = McpApiToken(token=secrets.token_urlsafe(32), label=label)
+        session.add(token)
+        session.commit()
+        session.refresh(token)
+        return token
+
+
+def mcp_api_token_get(token: str) -> Optional[McpApiToken]:
+    with Session(_engine) as session:
+        return session.exec(select(McpApiToken).where(McpApiToken.token == token)).first()
+
+
+def mcp_api_token_list() -> list[McpApiToken]:
+    with Session(_engine) as session:
+        return list(session.exec(select(McpApiToken).order_by(McpApiToken.created_at)))
+
+
+def mcp_api_token_delete(token_id: int) -> Optional[McpApiToken]:
+    with Session(_engine) as session:
+        token = session.get(McpApiToken, token_id)
+        if token:
+            session.delete(token)
+            session.commit()
+        return token

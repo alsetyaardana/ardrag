@@ -119,6 +119,13 @@ restarts just the MCP subprocess (not the whole container), so changes apply wit
 - **MCP Users** — when OAuth is on, logins are checked against a dedicated user table, completely
   separate from the web UI's own `ADMIN_USER`/`ADMIN_PASSWORD`. Add/remove as many MCP-only
   accounts as you want from the same panel, each independently revocable.
+- **API Tokens** — a static, non-expiring Bearer token generated on demand, for clients that can't
+  do the interactive OAuth browser redirect at all — e.g.
+  [AnythingLLM](https://docs.anythingllm.com/mcp-compatibility/overview), which only supports
+  pasting a token into a config file's `headers` field (`{"Authorization": "Bearer <token>"}`), or
+  a `curl`/cron script. Shown once at creation (same "reveal once" pattern as a GitHub personal
+  access token) and independently revocable — revoking takes effect immediately, no MCP restart
+  needed.
 - **Public URL** — required only when OAuth is on (used in the OAuth issuer/well-known metadata);
   set it to the real public HTTPS address the MCP server is reachable at.
 

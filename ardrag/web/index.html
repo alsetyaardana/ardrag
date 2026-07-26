@@ -467,6 +467,23 @@
               </div>
               <div id="mcp-users-status" class="muted"></div>
             </div>
+
+            <div id="mcp-tokens-section" style="display:none;">
+              <hr class="section-divider" />
+              <h4>API Tokens</h4>
+              <p class="muted">Static Bearer tokens for clients that can't do the OAuth login redirect (e.g. AnythingLLM's custom-headers config). Shown only once at creation — copy it immediately.</p>
+              <table class="mcp-users-table" id="mcp-tokens-table"><tbody></tbody></table>
+              <div class="row">
+                <input type="text" id="mcp-token-label" placeholder="Label (e.g. AnythingLLM)" />
+                <button class="secondary" id="add-mcp-token-btn" type="button">Generate token</button>
+              </div>
+              <div id="mcp-tokens-status" class="muted"></div>
+              <div id="mcp-token-reveal" style="display:none;">
+                <label>New token (copy now — it won't be shown again)
+                  <input type="text" id="mcp-token-reveal-value" readonly onclick="this.select()" />
+                </label>
+              </div>
+            </div>
           </div>
         </div>
       </section>
@@ -1069,10 +1086,22 @@
       `).join('') || '<tr><td class="muted">No MCP users yet.</td></tr>';
     }
 
+    function renderMcpTokens(tokens) {
+      const tbody = document.querySelector('#mcp-tokens-table tbody');
+      tbody.innerHTML = tokens.map(t => `
+        <tr>
+          <td>${t.label}</td>
+          <td class="muted">${new Date(t.created_at).toLocaleDateString()}</td>
+          <td><button class="secondary remove-mcp-token-btn" data-id="${t.id}" type="button">Revoke</button></td>
+        </tr>
+      `).join('') || '<tr><td class="muted">No API tokens yet.</td></tr>';
+    }
+
     function updateMcpUrlRowVisibility() {
       const oauthOn = document.getElementById('mcp-oauth-enabled').checked;
       document.getElementById('mcp-public-url-row').style.display = oauthOn ? '' : 'none';
       document.getElementById('mcp-users-section').style.display = oauthOn ? '' : 'none';
+      document.getElementById('mcp-tokens-section').style.display = oauthOn ? '' : 'none';
     }
 
     async function loadMcpSettings() {
@@ -1086,6 +1115,7 @@
       document.getElementById('mcp-sse-url').value = data.sse_url;
       document.getElementById('mcp-mcp-url').value = data.mcp_url;
       renderMcpUsers(data.mcp_users);
+      renderMcpTokens(data.mcp_api_tokens);
       updateMcpUrlRowVisibility();
     }
 
@@ -1146,6 +1176,36 @@
       if (!e.target.classList.contains('remove-mcp-user-btn')) return;
       const id = e.target.dataset.id;
       await api(`/settings/mcp/users/${id}`, { method: 'DELETE' });
+      loadMcpSettings();
+    });
+
+    document.getElementById('add-mcp-token-btn').addEventListener('click', async () => {
+      const statusEl = document.getElementById('mcp-tokens-status');
+      const label = document.getElementById('mcp-token-label').value.trim();
+      if (!label) {
+        statusEl.textContent = 'A label is required.';
+        return;
+      }
+      const fd = new FormData();
+      fd.append('label', label);
+      const res = await api('/settings/mcp/tokens', { method: 'POST', body: fd });
+      const data = await res.json();
+      if (!res.ok) {
+        statusEl.textContent = `Error: ${data.detail}`;
+        return;
+      }
+      document.getElementById('mcp-token-label').value = '';
+      statusEl.textContent = '';
+      document.getElementById('mcp-token-reveal').style.display = '';
+      document.getElementById('mcp-token-reveal-value').value = data.token;
+      loadMcpSettings();
+    });
+
+    document.getElementById('mcp-tokens-table').addEventListener('click', async (e) => {
+      if (!e.target.classList.contains('remove-mcp-token-btn')) return;
+      const id = e.target.dataset.id;
+      await api(`/settings/mcp/tokens/${id}`, { method: 'DELETE' });
+      document.getElementById('mcp-token-reveal').style.display = 'none';
       loadMcpSettings();
     });
 

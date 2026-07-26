@@ -428,6 +428,10 @@ def _serialize_mcp_settings(settings: db.Settings, request: Request) -> dict:
             {"id": u.id, "username": u.username, "created_at": u.created_at.isoformat()}
             for u in db.mcp_user_list()
         ],
+        "mcp_api_tokens": [
+            {"id": t.id, "label": t.label, "created_at": t.created_at.isoformat()}
+            for t in db.mcp_api_token_list()
+        ],
     }
 
 
@@ -482,6 +486,25 @@ def remove_mcp_user(user_id: int, _: str = AuthDep):
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
     return {"status": "deleted", "id": user_id}
+
+
+@app.post("/settings/mcp/tokens")
+def add_mcp_api_token(label: str = Form(...), _: str = AuthDep):
+    label = label.strip()
+    if not label:
+        raise HTTPException(status_code=400, detail="Label is required")
+    token = db.mcp_api_token_create(label)
+    # Returned only here, right after creation — never included in GET /settings/mcp or any
+    # other listing, same "reveal once" pattern as a GitHub personal access token.
+    return {"id": token.id, "label": token.label, "created_at": token.created_at.isoformat(), "token": token.token}
+
+
+@app.delete("/settings/mcp/tokens/{token_id}")
+def remove_mcp_api_token(token_id: int, _: str = AuthDep):
+    token = db.mcp_api_token_delete(token_id)
+    if not token:
+        raise HTTPException(status_code=404, detail="Token not found")
+    return {"status": "deleted", "id": token_id}
 
 
 @app.post("/classify/backfill")

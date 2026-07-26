@@ -183,18 +183,33 @@ class ArdragOAuthProvider(OAuthProvider):
 
     async def load_access_token(self, token: str) -> AccessToken | None:
         stored = db.oauth_load_access_token(token)
-        if not stored:
-            return None
-        if stored["expires_at"] is not None and stored["expires_at"] < time.time():
-            db.oauth_delete_access_token(token)
-            return None
-        return AccessToken(
-            token=stored["token"],
-            client_id=stored["client_id"],
-            scopes=stored["scopes"],
-            expires_at=stored["expires_at"],
-            resource=stored.get("resource"),
-        )
+        if stored:
+            if stored["expires_at"] is not None and stored["expires_at"] < time.time():
+                db.oauth_delete_access_token(token)
+                return None
+            return AccessToken(
+                token=stored["token"],
+                client_id=stored["client_id"],
+                scopes=stored["scopes"],
+                expires_at=stored["expires_at"],
+                resource=stored.get("resource"),
+            )
+
+        # Fall back to a manually-generated static API token (see McpApiToken in db.py) — these
+        # skip the interactive OAuth authorize/login redirect entirely, for clients that can't do
+        # a browser flow (e.g. AnythingLLM, which only supports pasting a static Bearer token into
+        # a config file).
+        api_token = db.mcp_api_token_get(token)
+        if api_token:
+            return AccessToken(
+                token=api_token.token,
+                client_id=f"static-token:{api_token.label}",
+                scopes=[],
+                expires_at=None,
+                subject=api_token.label,
+            )
+
+        return None
 
     async def verify_token(self, token: str) -> AccessToken | None:
         return await self.load_access_token(token)
