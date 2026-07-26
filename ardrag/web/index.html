@@ -103,6 +103,8 @@
   form.upload-form { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
   .filter-bar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
   .filter-bar .grow { flex: 1; min-width: 180px; }
+  .classify-bar { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+  .classify-bar select { flex: 0 1 auto; }
 
   input[type="text"], input[type="password"], input[type="file"], select {
     padding: 7px 10px; border: 1px solid var(--border); border-radius: 7px; font-size: 0.85rem;
@@ -306,6 +308,7 @@
     form.upload-form > * { width: 100%; }
     .filter-bar { flex-direction: column; align-items: stretch; }
     .filter-bar .grow { min-width: 0; }
+    .classify-bar { flex-direction: column; align-items: stretch; }
 
     .bulk-bar { flex-direction: column; align-items: stretch; }
 
@@ -391,6 +394,25 @@
           </div>
         </div>
 
+        <div class="panel">
+          <div class="classify-bar">
+            <span class="muted" style="white-space:nowrap;">AI Classification:</span>
+            <select id="classify-scope-select">
+              <option value="all">All documents</option>
+              <option value="uncategorized">Only Uncategorized / General</option>
+            </select>
+            <button class="secondary" id="classify-btn" type="button">Reclassify</button>
+            <span id="classify-status" class="muted"></span>
+          </div>
+          <div class="progress-wrap" id="classify-progress-wrap">
+            <div class="progress-bar-track"><div class="progress-bar-fill" id="classify-progress-fill"></div></div>
+            <div class="progress-label">
+              <span id="classify-progress-current">—</span>
+              <span id="classify-progress-count">0 / 0</span>
+            </div>
+          </div>
+        </div>
+
         <div class="bulk-bar" id="bulk-bar">
           <span id="bulk-count" class="muted">0 selected</span>
           <input type="text" id="bulk-vendor-input" list="vendor-list" placeholder="Set vendor…" autocomplete="off" />
@@ -446,31 +468,10 @@
 
         <div class="panel">
           <h3>AI Classification</h3>
-          <p class="muted">Auto-detect vendor, doc type, and tags from document content, via the API configured in Settings &gt; AI Configuration.</p>
+          <p class="muted">Token usage via the API configured in Settings &gt; AI Configuration. Trigger a (re)classify from the Documents tab.</p>
           <div class="cards" id="deepseek-usage-cards"></div>
           <p class="muted" style="margin-top:10px;">Tokens per hour (last 24h)</p>
           <div class="bar-chart hourly" id="deepseek-hourly-chart"></div>
-
-          <hr class="section-divider" />
-
-          <div class="row">
-            <label>
-              Classify scope
-              <select id="classify-scope-select">
-                <option value="all">All documents</option>
-                <option value="uncategorized">Only Uncategorized / General</option>
-              </select>
-            </label>
-          </div>
-          <button class="secondary" id="classify-btn" type="button">Reclassify</button>
-          <div class="progress-wrap" id="classify-progress-wrap">
-            <div class="progress-bar-track"><div class="progress-bar-fill" id="classify-progress-fill"></div></div>
-            <div class="progress-label">
-              <span id="classify-progress-current">—</span>
-              <span id="classify-progress-count">0 / 0</span>
-            </div>
-          </div>
-          <div id="classify-status" class="muted"></div>
         </div>
       </section>
 
@@ -998,6 +999,7 @@
     }
 
     document.getElementById('doc-list').addEventListener('click', async (e) => {
+      if (!e.target.classList.contains('danger')) return;
       const id = e.target.dataset.id;
       if (!id) return;
       if (!confirm('Delete this document?')) return;
