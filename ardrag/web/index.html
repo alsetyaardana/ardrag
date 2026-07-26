@@ -1055,6 +1055,13 @@
       const qStatus = h.qdrant.status === 'ok'
         ? `<span class="badge ok">healthy${h.qdrant.hybrid ? ' (hybrid)' : ''}</span>`
         : `<span class="badge error">error</span>`;
+      const s = h.settings;
+      const embeddingLabel = s.embedding_provider === 'api'
+        ? `${s.embedding_api_model || '(not set)'} <span class="muted" style="font-size:0.7em;">(API${s.embedding_api_dimension ? ', dim ' + s.embedding_api_dimension : ''})</span>`
+        : `${s.embedding_model} <span class="muted" style="font-size:0.7em;">(local)</span>`;
+      const classifyLabel = s.deepseek_api_key_set
+        ? `${s.deepseek_model} <span class="muted" style="font-size:0.7em;">(${(new URL(s.classify_base_url)).hostname})</span>`
+        : `<span class="muted">not configured</span>`;
       document.getElementById('health-cards').innerHTML = `
         <div class="card"><div class="label">Documents</div><div class="value">${h.document_count}</div></div>
         <div class="card"><div class="label">Chunks / Vectors</div><div class="value">${h.chunk_count}</div></div>
@@ -1062,8 +1069,9 @@
         <div class="card"><div class="label">Uptime</div><div class="value">${Math.floor(h.uptime_seconds/60)}m</div></div>
         <div class="card"><div class="label">Uploads disk usage</div><div class="value">${fmtBytes(h.uploads_disk_usage_bytes)}</div></div>
         <div class="card"><div class="label">Disk free</div><div class="value">${fmtBytes(h.disk_free_bytes)}</div></div>
-        <div class="card"><div class="label">Embedding model</div><div class="value" style="font-size:0.95rem">${h.settings.embedding_model}</div></div>
-        <div class="card"><div class="label">Chunk size / overlap</div><div class="value" style="font-size:1.1rem">${h.settings.chunk_size} / ${h.settings.chunk_overlap}</div></div>
+        <div class="card"><div class="label">Embedding model</div><div class="value" style="font-size:0.95rem">${embeddingLabel}</div></div>
+        <div class="card"><div class="label">Chunk size / overlap</div><div class="value" style="font-size:1.1rem">${s.chunk_size} / ${s.chunk_overlap}</div></div>
+        <div class="card"><div class="label">Classification model</div><div class="value" style="font-size:0.95rem">${classifyLabel}</div></div>
       `;
       const r = h.reindex;
       document.getElementById('reindex-status').textContent = r.running
