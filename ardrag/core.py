@@ -6,6 +6,7 @@ from openai import OpenAI
 from qdrant_client import QdrantClient
 from qdrant_client.http import models as qmodels
 from qdrant_client.http.exceptions import UnexpectedResponse
+from tokenizers import Tokenizer
 
 from ardrag import db
 from ardrag.config import EMBEDDING_THREADS, QDRANT_COLLECTION, QDRANT_URL, SUPPORTED_EMBEDDING_MODELS
@@ -24,6 +25,24 @@ SPARSE_VECTOR_NAME = "sparse"
 # of reloading on every call. Only one is "active" per current settings at a time in practice.
 _embedder_cache: dict[str, TextEmbedding] = {}
 _sparse_embedder: SparseTextEmbedding = None
+
+# Separate, truncation-disabled clone of each model's tokenizer, used only for measuring the true
+# token count of a piece of text (see count_tokens()). FastEmbed's own TextEmbedding.token_count()
+# looks like it would do this, but it silently caps at the model's max sequence length (e.g. always
+# returns exactly 512 for anything ≥512 real tokens) since it shares the same tokenizer config the
+# embedding pipeline uses to truncate — useless for detecting "how much too long is this". Cloning
+# the tokenizer (rather than toggling truncation on the live one in-place) avoids any chance of a
+# concurrent embed() call on another thread momentarily running without truncation.
+_counting_tokenizer_cache: dict[str, Tokenizer] = {}
+
+
+def _get_counting_tokenizer(model_name: str) -> Tokenizer:
+    if model_name not in _counting_tokenizer_cache:
+        embedder = _get_embedder(model_name)
+        clone = Tokenizer.from_str(embedder.model.tokenizer.to_str())
+        clone.no_truncation()
+        _counting_tokenizer_cache[model_name] = clone
+    return _counting_tokenizer_cache[model_name]
 
 
 def _get_embedder(model_name: str) -> TextEmbedding:
@@ -117,6 +136,38 @@ def chunk_text(text: str, size: int, overlap: int) -> list[str]:
     return chunks
 
 
+def count_tokens(text: str, settings: "db.Settings") -> int:
+    """Real, untruncated token count via a dedicated clone of the active local model's tokenizer,
+    or a char/4 approximation for an API provider (no generic way to know an arbitrary
+    OpenAI-compatible endpoint's tokenizer)."""
+    if settings.embedding_provider == "api":
+        return max(1, len(text) // 4)
+    return len(_get_counting_tokenizer(settings.embedding_model).encode(text).ids)
+
+
+def _split_to_fit(doc_name: str, chunk: str, settings: "db.Settings", max_tokens: int) -> list[str]:
+    """Repeatedly halves `chunk` until every piece — combined with the doc_name prefix
+    index_document() adds before embedding — fits within max_tokens. Pieces at or under 20 chars
+    are left alone regardless (guards against looping forever on a max_tokens set absurdly low,
+    or on content with no natural split points)."""
+    pieces = [chunk]
+    while True:
+        oversized_idx = [
+            i for i, p in enumerate(pieces)
+            if len(p) > 20 and count_tokens(f"{doc_name}\n\n{p}", settings) > max_tokens
+        ]
+        if not oversized_idx:
+            return pieces
+        new_pieces = []
+        for i, p in enumerate(pieces):
+            if i in oversized_idx:
+                mid = len(p) // 2
+                new_pieces.extend([p[:mid], p[mid:]])
+            else:
+                new_pieces.append(p)
+        pieces = new_pieces
+
+
 def embed_texts(texts: list[str], settings: "db.Settings") -> list[list[float]]:
     if settings.embedding_provider == "api":
         client = OpenAI(base_url=settings.embedding_api_base_url, api_key=settings.embedding_api_key)
@@ -153,6 +204,18 @@ def index_document(doc_name: str, text: str) -> int:
     chunks = chunk_text(text, settings.chunk_size, settings.chunk_overlap)
     if not chunks:
         return 0
+
+    # chunk_size/overlap (above) are a char-based target, not a guarantee — a chunk whose real
+    # token count (with the doc_name prefix added below) exceeds what the active embedding model
+    # actually accepts would otherwise get silently truncated by the model's own tokenizer (most
+    # embedding backends truncate rather than error), quietly losing the tail of that chunk. Split
+    # any offender further right here, pre-emptively, before it's ever sent to the embedder.
+    if settings.max_embedding_tokens:
+        chunks = [
+            piece
+            for chunk in chunks
+            for piece in _split_to_fit(doc_name, chunk, settings, settings.max_embedding_tokens)
+        ]
 
     # Prepend the document name to what gets embedded (not to the stored/returned text) so the
     # product/file identity contributes to the vector — this matters a lot when many documents

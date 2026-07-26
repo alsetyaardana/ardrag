@@ -58,6 +58,13 @@ class Settings(SQLModel, table=True):
     embedding_api_key: str = Field(default="")
     embedding_api_model: str = Field(default="")
     embedding_api_dimension: int = Field(default=0)
+    # Max tokens per embedding input — chunks (with the doc_name prefix core.py adds) that exceed
+    # this are split further automatically right before embedding, using the real tokenizer for
+    # local FastEmbed models (TextEmbedding.token_count) or a char/4 approximation for API
+    # providers (no generic way to know an arbitrary OpenAI-compatible endpoint's tokenizer).
+    # 512 matches all 4 curated local models' actual limit; API providers often allow far more
+    # (e.g. 8191 for OpenAI) — edit this after switching. 0 disables the check entirely.
+    max_embedding_tokens: int = Field(default=512)
     # Classification API base URL — generalizes deepseek_api_key/deepseek_model above (kept as-is
     # to avoid a data migration) into a full generic OpenAI-compatible endpoint. Defaults to
     # DeepSeek's URL for continuity but is fully user-editable.
@@ -228,6 +235,8 @@ def _migrate_ai_config_columns() -> None:
             conn.execute(text("ALTER TABLE settings ADD COLUMN embedding_api_dimension INTEGER DEFAULT 0"))
         if "classify_base_url" not in cols:
             conn.execute(text("ALTER TABLE settings ADD COLUMN classify_base_url VARCHAR DEFAULT 'https://api.deepseek.com'"))
+        if "max_embedding_tokens" not in cols:
+            conn.execute(text("ALTER TABLE settings ADD COLUMN max_embedding_tokens INTEGER DEFAULT 512"))
         conn.commit()
 
 

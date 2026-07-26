@@ -530,7 +530,12 @@
                 Chunk overlap (chars)
                 <input type="text" id="chunk-overlap-input" />
               </label>
+              <label>
+                Max embedding tokens
+                <input type="text" id="max-embedding-tokens-input" placeholder="512" />
+              </label>
             </div>
+            <p class="muted">Chunks exceeding this are split further automatically right before embedding — local models here typically cap around 512 tokens; OpenAI-compatible APIs often allow far more (e.g. 8191). Set 0 to disable this check.</p>
 
             <hr class="section-divider" />
 
@@ -1135,6 +1140,7 @@
         .join('');
       document.getElementById('chunk-size-input').value = cur.chunk_size;
       document.getElementById('chunk-overlap-input').value = cur.chunk_overlap;
+      document.getElementById('max-embedding-tokens-input').value = cur.max_embedding_tokens;
       document.getElementById('settings-note').textContent =
         'Local models auto-embed on this machine (no API cost). Changing embedding provider/model requires a full reindex (it recreates the vector collection) — chunk size/overlap changes only affect documents indexed after the change, run Reindex to apply retroactively.';
 
@@ -1162,6 +1168,7 @@
       const fd = new FormData();
       fd.append('chunk_size', document.getElementById('chunk-size-input').value);
       fd.append('chunk_overlap', document.getElementById('chunk-overlap-input').value);
+      fd.append('max_embedding_tokens', document.getElementById('max-embedding-tokens-input').value);
 
       const provider = document.getElementById('embedding-provider-api').checked ? 'api' : 'local';
       fd.append('embedding_provider', provider);
