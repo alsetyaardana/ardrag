@@ -1,0 +1,10 @@
+{% if not sessions %}
+<div class="chat-history-empty">No chats yet.</div>
+{% else %}
+{% for s in sessions %}
+<div class="chat-history-item {{ 'active' if s.id == active_id else '' }}" data-id="{{ s.id }}">
+  <span class="title">{{ s.title }}</span>
+  <button class="chat-delete-btn" type="button" data-id="{{ s.id }}" title="Delete chat">✕</button>
+</div>
+{% endfor %}
+{% endif %}

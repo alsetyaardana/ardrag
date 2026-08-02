@@ -33,6 +33,14 @@ class Document(SQLModel, table=True):
     doc_type: str = Field(default=UNCATEGORIZED_TYPE, index=True)
     tags_json: str = Field(default="[]")
     uploaded_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    # Per-document override of the global Settings.chunk_size/chunk_overlap — NULL means "use
+    # whatever the global setting is at index time" (the original behavior). Set via the
+    # Documents-tab re-embed popup for documents whose content doesn't chunk well at the global
+    # default (e.g. a datasheet with unusually large spec tables). Persisted here (rather than
+    # applied once and forgotten) so a later "Reindex all documents" run doesn't silently
+    # overwrite it back to the global default.
+    chunk_size: Optional[int] = Field(default=None)
+    chunk_overlap: Optional[int] = Field(default=None)
 
     @property
     def tags(self) -> list[str]:
@@ -128,6 +136,34 @@ class DeepseekUsageLog(SQLModel, table=True):
     total_tokens: int = 0
 
 
+class ChatSession(SQLModel, table=True):
+    """A single AI Chat conversation. `title` is auto-derived from the first user message so the
+    history sidebar has something readable without asking the user to name each chat."""
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    title: str = Field(default="New chat")
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), index=True)
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+class ChatMessage(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    session_id: int = Field(index=True)
+    role: str  # "user" | "assistant"
+    content: str
+    # JSON list of {doc_name, text, score} — the RAG chunks the assistant's answer was grounded
+    # in. Empty for user messages.
+    sources_json: str = Field(default="[]")
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), index=True)
+
+    @property
+    def sources(self) -> list[dict]:
+        try:
+            return json.loads(self.sources_json)
+        except (TypeError, ValueError):
+            return []
+
+
 # ---- OAuth 2.1 authorization server storage (for the MCP server's Claude.ai Custom Connector
 # support). Persisted in SQLite rather than in-memory so registered clients/tokens survive
 # container redeploys — losing them would silently break every previously-connected client. ----
@@ -184,6 +220,10 @@ def _migrate_document_columns() -> None:
             conn.execute(text(f"ALTER TABLE document ADD COLUMN doc_type VARCHAR DEFAULT '{UNCATEGORIZED_TYPE}'"))
         if "tags_json" not in cols:
             conn.execute(text("ALTER TABLE document ADD COLUMN tags_json VARCHAR DEFAULT '[]'"))
+        if "chunk_size" not in cols:
+            conn.execute(text("ALTER TABLE document ADD COLUMN chunk_size INTEGER"))
+        if "chunk_overlap" not in cols:
+            conn.execute(text("ALTER TABLE document ADD COLUMN chunk_overlap INTEGER"))
         conn.commit()
 
 
@@ -374,6 +414,20 @@ def update_document_metadata(
             doc.doc_type = doc_type
         if tags is not None:
             doc.tags_json = json.dumps(tags)
+        session.add(doc)
+        session.commit()
+        session.refresh(doc)
+        return doc
+
+
+def update_document_chunk_config(doc_id: int, chunk_size: int, chunk_overlap: int, chunk_count: int) -> Optional[Document]:
+    with Session(_engine) as session:
+        doc = session.get(Document, doc_id)
+        if not doc:
+            return None
+        doc.chunk_size = chunk_size
+        doc.chunk_overlap = chunk_overlap
+        doc.chunk_count = chunk_count
         session.add(doc)
         session.commit()
         session.refresh(doc)
@@ -758,3 +812,67 @@ def mcp_api_token_delete(token_id: int) -> Optional[McpApiToken]:
             session.delete(token)
             session.commit()
         return token
+
+
+# ---- AI Chat (web UI) ----
+
+
+def chat_session_create() -> ChatSession:
+    with Session(_engine) as session:
+        chat = ChatSession()
+        session.add(chat)
+        session.commit()
+        session.refresh(chat)
+        return chat
+
+
+def chat_session_list() -> list[ChatSession]:
+    with Session(_engine) as session:
+        return list(session.exec(select(ChatSession).order_by(ChatSession.updated_at.desc())))
+
+
+def chat_session_get(session_id: int) -> Optional[ChatSession]:
+    with Session(_engine) as session:
+        return session.get(ChatSession, session_id)
+
+
+def chat_session_touch(session_id: int, title: Optional[str] = None) -> None:
+    with Session(_engine) as session:
+        chat = session.get(ChatSession, session_id)
+        if not chat:
+            return
+        chat.updated_at = datetime.now(timezone.utc)
+        if title is not None:
+            chat.title = title
+        session.add(chat)
+        session.commit()
+
+
+def chat_session_delete(session_id: int) -> Optional[ChatSession]:
+    with Session(_engine) as session:
+        chat = session.get(ChatSession, session_id)
+        if not chat:
+            return None
+        for msg in session.exec(select(ChatMessage).where(ChatMessage.session_id == session_id)):
+            session.delete(msg)
+        session.delete(chat)
+        session.commit()
+        return chat
+
+
+def chat_message_add(session_id: int, role: str, content: str, sources: Optional[list[dict]] = None) -> ChatMessage:
+    with Session(_engine) as session:
+        msg = ChatMessage(session_id=session_id, role=role, content=content, sources_json=json.dumps(sources or []))
+        session.add(msg)
+        session.commit()
+        session.refresh(msg)
+        return msg
+
+
+def chat_message_list(session_id: int) -> list[ChatMessage]:
+    with Session(_engine) as session:
+        return list(
+            session.exec(
+                select(ChatMessage).where(ChatMessage.session_id == session_id).order_by(ChatMessage.created_at)
+            )
+        )

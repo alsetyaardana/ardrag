@@ -1,0 +1,9 @@
+{% import "_chat_macros.html" as chat %}
+{% if not messages %}
+<div class="chat-empty" id="chat-empty">
+  <div class="chat-empty-badge">AI</div>
+  <p>Ask ArdRAG Intelligence anything about the document library — answers are grounded in the knowledge base, with sources cited.</p>
+</div>
+{% else %}
+{% for m in messages %}{{ chat.render_message(m) }}{% endfor %}
+{% endif %}

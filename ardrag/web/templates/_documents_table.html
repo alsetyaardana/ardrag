@@ -1,0 +1,45 @@
+{% macro icon_classify() %}<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="6" x2="20" y2="6"></line><circle cx="14" cy="6" r="2" fill="currentColor" stroke="none"></circle><line x1="4" y1="12" x2="20" y2="12"></line><circle cx="8" cy="12" r="2" fill="currentColor" stroke="none"></circle><line x1="4" y1="18" x2="20" y2="18"></line><circle cx="16" cy="18" r="2" fill="currentColor" stroke="none"></circle></svg>{% endmacro %}
+{% macro icon_preview() %}<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>{% endmacro %}
+{% macro icon_download() %}<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"></path><path d="M7 10l5 5 5-5"></path><path d="M5 21h14"></path></svg>{% endmacro %}
+{% macro icon_delete() %}<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16"></path><path d="M10 11v6"></path><path d="M14 11v6"></path><path d="M6 7l1 13a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-13"></path><path d="M9 7V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v3"></path></svg>{% endmacro %}
+
+<table>
+  <thead>
+    <tr>
+      <th class="checkbox-cell"><input type="checkbox" id="select-all-checkbox" /></th>
+      <th>Name</th><th>Vendor</th><th>Type</th><th>Tags</th><th>Chunks</th><th>Uploaded</th><th colspan="4">Actions</th>
+    </tr>
+  </thead>
+  <tbody id="doc-list">
+    {% for d in items %}
+    <tr>
+      <td class="checkbox-cell"><input type="checkbox" class="row-checkbox" data-id="{{ d.id }}" /></td>
+      <td>{{ d.name }}</td>
+      <td class="muted">{{ d.vendor }}</td>
+      <td class="muted">{{ d.doc_type }}</td>
+      <td>{% for t in d.tags %}<span class="tag-badge">{{ t }}</span>{% endfor %}</td>
+      <td>{{ d.chunk_count }}</td>
+      <td class="muted">{{ d.uploaded_at.strftime('%m/%d/%Y, %I:%M %p') }}</td>
+      <td class="action-cell">
+        <button class="icon-btn classify-doc-btn" type="button" data-id="{{ d.id }}" data-name="{{ d.name }}"
+                data-chunk-size="{{ d.chunk_size or '' }}" data-chunk-overlap="{{ d.chunk_overlap or '' }}"
+                title="Classification (chunking config)" aria-label="Classification">{{ icon_classify() }}</button>
+      </td>
+      <td class="action-cell"><a class="icon-btn" href="/documents/{{ d.id }}/preview" target="_blank" rel="noopener" title="Preview" aria-label="Preview">{{ icon_preview() }}</a></td>
+      <td class="action-cell"><a class="icon-btn" href="/documents/{{ d.id }}/download" title="Download" aria-label="Download">{{ icon_download() }}</a></td>
+      <td class="action-cell"><button class="icon-btn icon-btn-danger danger" type="button" data-id="{{ d.id }}" title="Delete" aria-label="Delete">{{ icon_delete() }}</button></td>
+    </tr>
+    {% else %}
+    <tr><td colspan="11" class="muted" style="padding:20px; text-align:center;">No documents match these filters.</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+<div class="pagination-bar">
+  <div class="muted">{% if total == 0 %}No documents{% else %}Showing {{ start }}–{{ end }} of {{ total }}{% endif %}</div>
+  <div class="pagination-controls">
+    <button class="secondary page-nav-btn" type="button" data-target-page="{{ page - 1 }}" {% if page <= 1 %}disabled{% endif %}>‹ Prev</button>
+    <span class="muted">Page {{ page }} of {{ total_pages }}</span>
+    <button class="secondary page-nav-btn" type="button" data-target-page="{{ page + 1 }}" {% if page >= total_pages %}disabled{% endif %}>Next ›</button>
+  </div>
+</div>

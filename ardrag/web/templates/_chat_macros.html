@@ -1,0 +1,12 @@
+{% macro render_message(m) %}
+<div class="chat-msg {{ m.role }}">
+  <span class="chat-role-label">{{ 'User' if m.role == 'user' else 'ArdRAG Intelligence' }}</span>
+  <div class="chat-bubble{{ ' error' if m.is_error else '' }}">{{ render_markdown_lite(m.content)|safe }}</div>
+  {% set doc_names = (m.sources or [])|map(attribute='doc_name')|unique|list %}
+  {% if doc_names %}
+  <div class="chat-sources">
+    {% for name in doc_names %}<span class="chat-source-chip" title="{{ name }}">📄 {{ name }}</span>{% endfor %}
+  </div>
+  {% endif %}
+</div>
+{% endmacro %}

@@ -1,0 +1,11 @@
+{% if not users %}
+<tr><td class="muted">No MCP users yet.</td></tr>
+{% else %}
+{% for u in users %}
+<tr>
+  <td>{{ u.username }}</td>
+  <td class="muted">{{ u.created_at.strftime('%m/%d/%Y') }}</td>
+  <td><button class="secondary remove-mcp-user-btn" data-id="{{ u.id }}" type="button">Remove</button></td>
+</tr>
+{% endfor %}
+{% endif %}

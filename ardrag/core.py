@@ -247,12 +247,14 @@ def delete_document_chunks(doc_name: str) -> None:
     )
 
 
-def index_document(doc_name: str, text: str) -> int:
+def index_document(doc_name: str, text: str, chunk_size: int = None, chunk_overlap: int = None) -> int:
+    """chunk_size/chunk_overlap default to the global Settings values — pass explicit values to
+    override them for this document only (see Document.chunk_size/chunk_overlap in db.py)."""
     ensure_collection()
     delete_document_chunks(doc_name)
 
     settings = db.get_settings()
-    chunks = chunk_text(text, settings.chunk_size, settings.chunk_overlap)
+    chunks = chunk_text(text, chunk_size or settings.chunk_size, chunk_overlap if chunk_overlap is not None else settings.chunk_overlap)
     if not chunks:
         return 0
 

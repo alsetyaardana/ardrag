@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "ardrag": {
+      "type": "sse",
+      "url": "https://ardrag-mcp.alindra.my.id/sse"
+    }
+  }
+}

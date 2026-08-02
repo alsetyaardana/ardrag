@@ -6,9 +6,11 @@ from pathlib import Path
 from typing import Optional
 
 from fastapi import Depends, FastAPI, Form, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
 
+from ardrag import chat as chat_mod
 from ardrag import classify, core, db, mcp_supervisor
 from ardrag import classify_job
 from ardrag import reindex as reindex_mod
@@ -22,6 +24,7 @@ from ardrag.config import (
     UPLOAD_DIR,
 )
 from ardrag.extract import extract_text
+from ardrag.markdown_lite import render_markdown_lite
 
 app = FastAPI(title="Ardrag API")
 
@@ -42,6 +45,12 @@ def _stop_mcp_subprocess():
 WEB_DIR = Path(__file__).parent / "web"
 _start_time = time.monotonic()
 
+# Server-rendered HTML fragments for the incremental HTMX migration (Documents tab first — see
+# GET /documents/table below). Kept alongside the rest of the vanilla web UI rather than
+# replacing it wholesale; other tabs still render entirely client-side for now.
+templates = Jinja2Templates(directory=WEB_DIR / "templates")
+templates.env.globals["render_markdown_lite"] = render_markdown_lite
+
 AuthDep = Depends(require_auth)
 
 _batch_status = {"running": False, "total": 0, "done": 0, "current": None, "results": []}
@@ -53,6 +62,8 @@ def _serialize_doc(doc: db.Document) -> dict:
         "name": doc.name,
         "content_hash": doc.content_hash,
         "chunk_count": doc.chunk_count,
+        "chunk_size": doc.chunk_size,
+        "chunk_overlap": doc.chunk_overlap,
         "vendor": doc.vendor,
         "doc_type": doc.doc_type,
         "tags": doc.tags,
@@ -249,6 +260,50 @@ def get_documents(
     }
 
 
+@app.get("/documents/table")
+def get_documents_table(
+    request: Request,
+    vendor: Optional[str] = None,
+    doc_type: Optional[str] = None,
+    tag: Optional[str] = None,
+    q: Optional[str] = None,
+    page: int = 1,
+    page_size: int = 20,
+    _: str = AuthDep,
+):
+    """Server-rendered HTML fragment version of GET /documents, for the Documents tab's HTMX-driven
+    table (see ardrag/web/templates/_documents_table.html and the doc-filter-form wiring in
+    index.html). Same filtering/pagination semantics as the JSON endpoint above, which stays as-is
+    for programmatic use.
+
+    Unlike the JSON endpoint, this one is always called with every form field present (HTMX
+    serializes the whole #doc-filter-form on each request, including untouched selects) — an
+    unset filter arrives as an empty string, not an absent param, so it has to be normalized to
+    None here or e.g. vendor="" would filter down to zero documents instead of meaning "any".
+    """
+    vendor, doc_type, tag, q = (v or None for v in (vendor, doc_type, tag, q))
+    docs = db.list_documents(vendor=vendor, doc_type=doc_type, tag=tag, q=q)
+    total = len(docs)
+    page_size = max(1, min(page_size, 200))
+    total_pages = max(1, -(-total // page_size))
+    page = max(1, min(page, total_pages))
+    start_idx = (page - 1) * page_size
+    items = docs[start_idx : start_idx + page_size]
+    return templates.TemplateResponse(
+        request,
+        "_documents_table.html",
+        {
+            "items": items,
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+            "total_pages": total_pages,
+            "start": 0 if total == 0 else start_idx + 1,
+            "end": min(page * page_size, total),
+        },
+    )
+
+
 @app.get("/folders")
 def get_folders(_: str = AuthDep):
     return db.list_folders()
@@ -318,6 +373,26 @@ def preview_document(doc_id: int, _: str = AuthDep):
     return FileResponse(path, media_type=media_type, content_disposition_type="inline")
 
 
+@app.post("/documents/{doc_id}/reembed")
+def reembed_document(doc_id: int, chunk_size: int = Form(...), chunk_overlap: int = Form(...), _: str = AuthDep):
+    if chunk_size < 100:
+        raise HTTPException(status_code=400, detail="Chunk size must be at least 100 characters")
+    if chunk_overlap < 0 or chunk_overlap >= chunk_size:
+        raise HTTPException(status_code=400, detail="Chunk overlap must be 0 or greater, and smaller than chunk size")
+    if reindex_mod.get_status()["running"] or _batch_status["running"]:
+        raise HTTPException(status_code=409, detail="Another indexing job is running — wait for it to finish first")
+
+    doc, path = _resolve_document_file(doc_id)
+    raw = path.read_bytes()
+    text = extract_text(doc.name, raw)
+    if not text.strip():
+        raise HTTPException(status_code=400, detail="No extractable text in this document")
+
+    chunk_count = core.index_document(doc.name, text, chunk_size=chunk_size, chunk_overlap=chunk_overlap)
+    updated = db.update_document_chunk_config(doc_id, chunk_size, chunk_overlap, chunk_count)
+    return {"status": "reembedded", "document": _serialize_doc(updated)}
+
+
 @app.delete("/documents/{doc_id}")
 def delete_document(doc_id: int, _: str = AuthDep):
     doc = db.delete_document(doc_id)
@@ -344,13 +419,17 @@ def search_documents(
     return core.search(q, top_k=top_k or DEFAULT_TOP_K, vendor=vendor, doc_type=doc_type, tag=tag)
 
 
-@app.get("/health")
-def health(_: str = AuthDep):
+def _compute_health() -> dict:
     docs = db.list_documents()
     total_chunks = sum(d.chunk_count for d in docs)
     upload_dir = Path(UPLOAD_DIR)
     disk_bytes = sum(f.stat().st_size for f in upload_dir.glob("**/*") if f.is_file())
     du = shutil.disk_usage(upload_dir)
+
+    vendor_counts: dict[str, int] = {}
+    for f in db.list_folders():
+        vendor_counts[f["vendor"]] = vendor_counts.get(f["vendor"], 0) + f["count"]
+
     return {
         "uptime_seconds": round(time.monotonic() - _start_time),
         "document_count": len(docs),
@@ -366,7 +445,96 @@ def health(_: str = AuthDep):
         "mcp_usage": db.get_mcp_usage_summary(),
         "classify_usage": db.get_deepseek_usage_summary(),
         "classify": classify_job.get_status(),
+        "vendor_counts": sorted(vendor_counts.items(), key=lambda kv: -kv[1]),
+        "recent_documents": docs[:6],
     }
+
+
+@app.get("/health")
+def health(_: str = AuthDep):
+    return _compute_health()
+
+
+def _fmt_bytes(n: float) -> str:
+    if n < 1024:
+        return f"{n:.0f} B"
+    units = ["KB", "MB", "GB", "TB"]
+    i = -1
+    while True:
+        n /= 1024
+        i += 1
+        if n < 1024 or i == len(units) - 1:
+            break
+    return f"{n:.1f} {units[i]}"
+
+
+def _fmt_uptime(seconds: int) -> str:
+    minutes = seconds // 60
+    if minutes < 60:
+        return f"{minutes}m"
+    hours, minutes = divmod(minutes, 60)
+    if hours < 24:
+        return f"{hours}h {minutes}m"
+    days, hours = divmod(hours, 24)
+    return f"{days}d {hours}h"
+
+
+def _bar_series(entries: dict, max_items: int = 10) -> list[dict]:
+    items = list(entries.items())[:max_items]
+    max_value = max((v for _, v in items), default=1) or 1
+    return [{"label": k, "value": v, "pct": round(v / max_value * 100, 1)} for k, v in items]
+
+
+def _hourly_series(hourly: list[dict]) -> list[dict]:
+    from datetime import datetime
+
+    max_value = max((h["count"] for h in hourly), default=1) or 1
+    out = []
+    for h in hourly:
+        hour_dt = datetime.fromisoformat(h["hour"])
+        pct = max(h["count"] / max_value * 100, 4 if h["count"] > 0 else 0)
+        out.append({"label": hour_dt.strftime("%-I%p").lower(), "count": h["count"], "pct": round(pct, 1)})
+    return out
+
+
+@app.get("/monitoring/html")
+def monitoring_html(request: Request, _: str = AuthDep):
+    h = _compute_health()
+    s = h["settings"]
+    embedding_label = (
+        f"{s['embedding_api_model'] or '(not set)'} (API, dim {s['embedding_api_dimension']})"
+        if s["embedding_provider"] == "api"
+        else f"{s['embedding_model']} (local)"
+    )
+    ai_model_label = s["deepseek_model"] if s["deepseek_api_key_set"] else None
+
+    reindex = h["reindex"]
+    batch = h["batch_upload"]
+    mcp = h["mcp_usage"]
+    ai = h["classify_usage"]
+
+    return templates.TemplateResponse(
+        request,
+        "_monitoring.html",
+        {
+            "h": h,
+            "s": s,
+            "embedding_label": embedding_label,
+            "ai_model_label": ai_model_label,
+            "reindex": reindex,
+            "batch": batch,
+            "uptime_label": _fmt_uptime(h["uptime_seconds"]),
+            "uploads_disk_label": _fmt_bytes(h["uploads_disk_usage_bytes"]),
+            "disk_free_label": _fmt_bytes(h["disk_free_bytes"]),
+            "mcp": mcp,
+            "mcp_by_tool_series": _bar_series(mcp["by_tool"]),
+            "mcp_hourly_series": _hourly_series(mcp["hourly"]),
+            "ai": ai,
+            "ai_hourly_series": _hourly_series(ai["hourly_tokens"]),
+            "vendor_series": _bar_series(dict(h["vendor_counts"])),
+            "recent_documents": h["recent_documents"],
+        },
+    )
 
 
 def _serialize_settings(settings: db.Settings) -> dict:
@@ -513,6 +681,16 @@ def get_mcp_settings(request: Request, _: str = AuthDep):
     return _serialize_mcp_settings(db.get_settings(), request)
 
 
+@app.get("/settings/mcp/users/html")
+def get_mcp_users_html(request: Request, _: str = AuthDep):
+    return templates.TemplateResponse(request, "_mcp_users_table.html", {"users": db.mcp_user_list()})
+
+
+@app.get("/settings/mcp/tokens/html")
+def get_mcp_tokens_html(request: Request, _: str = AuthDep):
+    return templates.TemplateResponse(request, "_mcp_tokens_table.html", {"tokens": db.mcp_api_token_list()})
+
+
 @app.post("/settings/mcp")
 def update_mcp_settings(
     request: Request,
@@ -612,6 +790,118 @@ def trigger_reindex(recreate_collection: bool = Form(False), _: str = AuthDep):
 @app.get("/reindex/status")
 def reindex_status(_: str = AuthDep):
     return reindex_mod.get_status()
+
+
+# ---- AI Chat ----
+
+
+def _serialize_session(s: db.ChatSession) -> dict:
+    return {"id": s.id, "title": s.title, "created_at": s.created_at.isoformat(), "updated_at": s.updated_at.isoformat()}
+
+
+def _serialize_message(m: db.ChatMessage) -> dict:
+    return {
+        "id": m.id,
+        "role": m.role,
+        "content": m.content,
+        "sources": m.sources,
+        "created_at": m.created_at.isoformat(),
+        "is_error": False,
+    }
+
+
+@app.get("/chat/sessions")
+def list_chat_sessions(_: str = AuthDep):
+    return [_serialize_session(s) for s in db.chat_session_list()]
+
+
+@app.get("/chat/sessions/html")
+def list_chat_sessions_html(request: Request, active_id: Optional[int] = None, _: str = AuthDep):
+    return templates.TemplateResponse(
+        request, "_chat_history.html", {"sessions": db.chat_session_list(), "active_id": active_id}
+    )
+
+
+@app.post("/chat/sessions")
+def create_chat_session(_: str = AuthDep):
+    return _serialize_session(db.chat_session_create())
+
+
+@app.get("/chat/sessions/{session_id}/messages")
+def get_chat_messages(session_id: int, _: str = AuthDep):
+    if not db.chat_session_get(session_id):
+        raise HTTPException(status_code=404, detail="Chat session not found")
+    return [_serialize_message(m) for m in db.chat_message_list(session_id)]
+
+
+@app.get("/chat/sessions/{session_id}/messages/html")
+def get_chat_messages_html(request: Request, session_id: int, _: str = AuthDep):
+    if not db.chat_session_get(session_id):
+        raise HTTPException(status_code=404, detail="Chat session not found")
+    messages = [_serialize_message(m) for m in db.chat_message_list(session_id)]
+    return templates.TemplateResponse(request, "_chat_messages.html", {"messages": messages})
+
+
+@app.delete("/chat/sessions/{session_id}")
+def delete_chat_session(session_id: int, _: str = AuthDep):
+    session = db.chat_session_delete(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Chat session not found")
+    return {"status": "deleted", "id": session_id}
+
+
+TITLE_MAX_CHARS = 60
+
+
+def _run_chat_turn(session: db.ChatSession, message: str) -> dict:
+    """Persists the user message, runs the RAG answer, and persists+returns the assistant
+    message dict — or an error-shaped dict (is_error=True) if the chat call failed, without
+    persisting an assistant row for it (a failed turn doesn't leave a phantom assistant message
+    in history, matching the original JSON-only endpoint's behavior)."""
+    prior = db.chat_message_list(session.id)
+    history = [{"role": m.role, "content": m.content} for m in prior]
+    db.chat_message_add(session.id, "user", message)
+
+    try:
+        result = chat_mod.answer(message, history)
+    except chat_mod.ChatError as e:
+        return {"role": "assistant", "content": str(e), "sources": [], "is_error": True}
+
+    assistant_msg = db.chat_message_add(session.id, "assistant", result["content"], sources=result["sources"])
+
+    title = session.title
+    if title == "New chat":
+        title = message[:TITLE_MAX_CHARS] + ("…" if len(message) > TITLE_MAX_CHARS else "")
+    db.chat_session_touch(session.id, title=title)
+
+    return _serialize_message(assistant_msg)
+
+
+@app.post("/chat/sessions/{session_id}/messages")
+def post_chat_message(session_id: int, message: str = Form(...), _: str = AuthDep):
+    session = db.chat_session_get(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Chat session not found")
+    message = message.strip()
+    if not message:
+        raise HTTPException(status_code=400, detail="Message cannot be empty")
+    result = _run_chat_turn(session, message)
+    if result.get("is_error"):
+        raise HTTPException(status_code=400, detail=result["content"])
+    return result
+
+
+@app.post("/chat/sessions/{session_id}/messages/html")
+def post_chat_message_html(request: Request, session_id: int, message: str = Form(...), _: str = AuthDep):
+    session = db.chat_session_get(session_id)
+    if not session:
+        m = {"role": "assistant", "content": "Chat session not found — start a new chat.", "sources": [], "is_error": True}
+        return templates.TemplateResponse(request, "_chat_message_single.html", {"m": m})
+    message = message.strip()
+    if not message:
+        return HTMLResponse("")
+    result = _run_chat_turn(session, message)
+    return templates.TemplateResponse(request, "_chat_message_single.html", {"m": result})
 
 
 if WEB_DIR.exists():

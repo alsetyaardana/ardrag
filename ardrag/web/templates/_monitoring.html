@@ -1,0 +1,147 @@
+<div class="cards" id="health-cards">
+  <div class="card"><div class="label">Documents</div><div class="value">{{ h.document_count }}</div></div>
+  <div class="card"><div class="label">Chunks / Vectors</div><div class="value">{{ h.chunk_count }}</div></div>
+  <div class="card">
+    <div class="label">Qdrant</div>
+    <div class="value">
+      {% if h.qdrant.status == 'ok' %}
+      <span class="badge ok">healthy{{ ' (hybrid)' if h.qdrant.hybrid else '' }}</span>
+      {% else %}
+      <span class="badge error">error</span>
+      {% endif %}
+    </div>
+  </div>
+  <div class="card"><div class="label">Uptime</div><div class="value">{{ uptime_label }}</div></div>
+  <div class="card"><div class="label">Uploads disk usage</div><div class="value">{{ uploads_disk_label }}</div></div>
+  <div class="card"><div class="label">Disk free</div><div class="value">{{ disk_free_label }}</div></div>
+</div>
+
+<div class="monitor-grid">
+  <div class="panel">
+    <h3>Indexing Activity</h3>
+    <div class="monitor-kv">
+      <span class="muted">Reindex</span>
+      <span>
+        {% if reindex.running %}
+        <span class="badge ok">running</span> {{ reindex.done }}/{{ reindex.total }} (current: {{ reindex.current or '—' }})
+        {% elif reindex.total %}
+        Last run: {{ reindex.done }}/{{ reindex.total }} processed, {{ reindex.errors|length }} error(s)
+        {% else %}
+        <span class="muted">No reindex has run yet.</span>
+        {% endif %}
+      </span>
+    </div>
+    <div class="monitor-kv">
+      <span class="muted">Batch upload</span>
+      <span>
+        {% if batch.running %}
+        <span class="badge ok">running</span> {{ batch.done }}/{{ batch.total }} (current: {{ batch.current or '—' }})
+        {% elif batch.total %}
+        Last run: {{ batch.done }}/{{ batch.total }} processed, {{ (batch.results|selectattr('status', 'equalto', 'error')|list)|length }} error(s)
+        {% else %}
+        <span class="muted">No batch upload has run yet.</span>
+        {% endif %}
+      </span>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h3>System Configuration</h3>
+    <div class="monitor-kv"><span class="muted">Embedding</span><span>{{ embedding_label }}</span></div>
+    <div class="monitor-kv"><span class="muted">Chunk size / overlap</span><span>{{ s.chunk_size }} / {{ s.chunk_overlap }}</span></div>
+    <div class="monitor-kv">
+      <span class="muted">AI model (chat + classify)</span>
+      <span>{% if ai_model_label %}{{ ai_model_label }}{% else %}<span class="muted">not configured</span>{% endif %}</span>
+    </div>
+  </div>
+</div>
+
+<div class="monitor-grid">
+  <div class="panel">
+    <h3>MCP Tool Usage</h3>
+    <div class="cards">
+      <div class="card"><div class="label">Total calls (all-time)</div><div class="value">{{ mcp.total_calls_all_time }}</div></div>
+      <div class="card"><div class="label">Calls (last {{ mcp.window_hours }}h)</div><div class="value">{{ mcp.total_calls_window }}</div></div>
+    </div>
+    <p class="muted" style="margin-top:10px;">Calls by tool (last 24h)</p>
+    {% if mcp_by_tool_series %}
+    <div class="bar-chart">
+      {% for item in mcp_by_tool_series %}
+      <div class="bar-row">
+        <span class="bar-label" title="{{ item.label }}">{{ item.label }}</span>
+        <div class="bar-track"><div class="bar-fill" style="width:{{ item.pct }}%"></div></div>
+        <span class="bar-value">{{ item.value }}</span>
+      </div>
+      {% endfor %}
+    </div>
+    {% else %}
+    <div class="bar-chart-empty">No activity yet.</div>
+    {% endif %}
+    <p class="muted" style="margin-top:14px;">Calls per hour (last 24h)</p>
+    {% if mcp.hourly and mcp.hourly|sum(attribute='count') > 0 %}
+    <div class="bar-chart hourly">
+      {% for item in mcp_hourly_series %}<div class="hbar" style="height:{{ item.pct }}%" title="{{ item.label }} — {{ item.count }}"></div>{% endfor %}
+    </div>
+    {% else %}
+    <div class="bar-chart-empty" style="height:90px; display:flex; align-items:center;">No activity in the last 24h.</div>
+    {% endif %}
+  </div>
+
+  <div class="panel">
+    <h3>AI Model Usage</h3>
+    <p class="muted">Token usage for AI Chat &amp; document classification (Settings &gt; AI Configuration).</p>
+    <div class="cards">
+      <div class="card"><div class="label">Calls</div><div class="value">{{ ai.total_calls }}</div></div>
+      <div class="card"><div class="label">Total tokens</div><div class="value">{{ '{:,}'.format(ai.total_tokens) }}</div></div>
+      <div class="card"><div class="label">Prompt tokens</div><div class="value">{{ '{:,}'.format(ai.prompt_tokens) }}</div></div>
+      <div class="card"><div class="label">Completion tokens</div><div class="value">{{ '{:,}'.format(ai.completion_tokens) }}</div></div>
+    </div>
+    <p class="muted" style="margin-top:10px;">Tokens per hour (last 24h)</p>
+    {% if ai.hourly_tokens and ai.hourly_tokens|sum(attribute='count') > 0 %}
+    <div class="bar-chart hourly">
+      {% for item in ai_hourly_series %}<div class="hbar" style="height:{{ item.pct }}%" title="{{ item.label }} — {{ item.count }}"></div>{% endfor %}
+    </div>
+    {% else %}
+    <div class="bar-chart-empty" style="height:90px; display:flex; align-items:center;">No activity in the last 24h.</div>
+    {% endif %}
+  </div>
+</div>
+
+<div class="monitor-grid">
+  <div class="panel">
+    <h3>Documents by Vendor</h3>
+    {% if vendor_series %}
+    <div class="bar-chart">
+      {% for item in vendor_series %}
+      <div class="bar-row">
+        <span class="bar-label" title="{{ item.label }}">{{ item.label }}</span>
+        <div class="bar-track"><div class="bar-fill" style="width:{{ item.pct }}%"></div></div>
+        <span class="bar-value">{{ item.value }}</span>
+      </div>
+      {% endfor %}
+    </div>
+    {% else %}
+    <div class="bar-chart-empty">No documents yet.</div>
+    {% endif %}
+  </div>
+
+  <div class="panel">
+    <h3>Recent Documents</h3>
+    {% if recent_documents %}
+    <table>
+      <thead><tr><th>Name</th><th>Vendor</th><th>Chunks</th></tr></thead>
+      <tbody>
+        {% for d in recent_documents %}
+        <tr>
+          <td>{{ d.name }}</td>
+          <td class="muted">{{ d.vendor }}</td>
+          <td class="muted">{{ d.chunk_count }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p class="muted">No documents yet.</p>
+    {% endif %}
+  </div>
+</div>

@@ -40,8 +40,16 @@ def reindex_all(recreate_collection: bool = False) -> dict:
                 _status["done"] += 1
                 continue
             content_hash = core.hash_content(text)
-            chunk_count = core.index_document(path.name, text)
             existing = db.get_document_by_name(path.name)
+            # A document with its own chunk_size/chunk_overlap (set via the Documents-tab
+            # re-embed popup) keeps using it here — otherwise a global "Reindex all documents"
+            # run would silently overwrite that per-document tuning back to the global default.
+            chunk_count = core.index_document(
+                path.name,
+                text,
+                chunk_size=existing.chunk_size if existing else None,
+                chunk_overlap=existing.chunk_overlap if existing else None,
+            )
             db.upsert_document(
                 path.name,
                 content_hash,
