@@ -1,0 +1,22 @@
+{% if not users %}
+<tr><td class="muted" colspan="6">No users yet.</td></tr>
+{% else %}
+{% for u in users %}
+<tr>
+  <td>{{ u.username }}</td>
+  <td>{{ u.display_name or '—' }}</td>
+  <td><span class="badge {{ 'ok' if u.role == 'superadmin' else '' }}">{{ u.role }}</span></td>
+  <td>{{ 'Active' if u.is_active else 'Inactive' }}</td>
+  <td class="muted">{{ u.created_at.strftime('%m/%d/%Y') }}</td>
+  <td class="action-cell">
+    <button class="secondary edit-user-btn" type="button"
+            data-id="{{ u.id }}" data-username="{{ u.username }}"
+            data-role="{{ u.role }}" data-display-name="{{ u.display_name }}"
+            data-is-active="{{ 'true' if u.is_active else 'false' }}">Edit</button>
+    {% if u.is_active %}
+    <button class="danger deactivate-user-btn" type="button" data-id="{{ u.id }}">Deactivate</button>
+    {% endif %}
+  </td>
+</tr>
+{% endfor %}
+{% endif %}

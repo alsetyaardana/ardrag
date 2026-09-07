@@ -14,7 +14,7 @@ from ardrag import chat as chat_mod
 from ardrag import classify, core, db, mcp_supervisor
 from ardrag import classify_job
 from ardrag import reindex as reindex_mod
-from ardrag.auth import create_session_token, get_current_user, require_auth, verify_credentials
+from ardrag.auth import create_session_token, get_current_user, require_auth, require_permission, verify_credentials
 from ardrag.config import (
     ALLOWED_UPLOAD_EXTENSIONS,
     MAX_UPLOAD_SIZE_BYTES,
@@ -52,6 +52,9 @@ templates = Jinja2Templates(directory=WEB_DIR / "templates")
 templates.env.globals["render_markdown_lite"] = render_markdown_lite
 
 AuthDep = Depends(require_auth)
+AdminDep = Depends(require_permission("manage_users"))
+WriteDep = Depends(require_permission("upload"))
+SettingsDep = Depends(require_permission("settings"))
 
 _batch_status = {"running": False, "total": 0, "done": 0, "current": None, "results": []}
 
@@ -91,10 +94,11 @@ def login_page():
 
 @app.post("/login")
 def login_submit(username: str = Form(...), password: str = Form(...)):
-    if not verify_credentials(username, password):
+    user_info = verify_credentials(username, password)
+    if not user_info:
         raise HTTPException(status_code=401, detail="Invalid credentials")
-    token = create_session_token(username)
-    resp = JSONResponse({"status": "ok"})
+    token = create_session_token(user_info)
+    resp = JSONResponse({"status": "ok", "role": user_info["role"]})
     resp.set_cookie(
         SESSION_COOKIE_NAME, token, max_age=SESSION_MAX_AGE_SECONDS, httponly=True, samesite="lax"
     )
@@ -106,6 +110,82 @@ def logout():
     resp = RedirectResponse("/login", status_code=303)
     resp.delete_cookie(SESSION_COOKIE_NAME)
     return resp
+
+
+@app.get("/api/me")
+def get_me(user: dict = AuthDep):
+    return user
+
+
+# ---- user management ----
+
+
+def _serialize_user(u: db.AppUser) -> dict:
+    return {
+        "id": u.id,
+        "username": u.username,
+        "role": u.role,
+        "display_name": u.display_name,
+        "is_active": u.is_active,
+        "created_at": u.created_at.isoformat(),
+    }
+
+
+@app.get("/admin/users/html")
+def users_page(request: Request, user: dict = AdminDep):
+    return templates.TemplateResponse(request, "_users_table.html", {"users": db.app_user_list()})
+
+
+@app.get("/admin/users/list")
+def list_users(user: dict = AdminDep):
+    return [_serialize_user(u) for u in db.app_user_list()]
+
+
+@app.post("/admin/users")
+def create_user(
+    username: str = Form(...),
+    password: str = Form(...),
+    role: str = Form("user"),
+    display_name: str = Form(""),
+    user: dict = AdminDep,
+):
+    username = username.strip()
+    if not username or not password:
+        raise HTTPException(status_code=400, detail="Username and password are required")
+    if role not in ("superadmin", "user"):
+        raise HTTPException(status_code=400, detail="Role must be 'superadmin' or 'user'")
+    try:
+        new_user = db.app_user_create(username, password, role, display_name.strip())
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return _serialize_user(new_user)
+
+
+@app.patch("/admin/users/{user_id}")
+def update_user(
+    user_id: int,
+    role: Optional[str] = Form(None),
+    display_name: Optional[str] = Form(None),
+    is_active: Optional[bool] = Form(None),
+    password: Optional[str] = Form(None),
+    user: dict = AdminDep,
+):
+    if role is not None and role not in ("superadmin", "user"):
+        raise HTTPException(status_code=400, detail="Role must be 'superadmin' or 'user'")
+    updated = db.app_user_update(user_id, role=role, display_name=display_name, is_active=is_active, password=password)
+    if not updated:
+        raise HTTPException(status_code=404, detail="User not found")
+    return _serialize_user(updated)
+
+
+@app.delete("/admin/users/{user_id}")
+def deactivate_user(user_id: int, user: dict = AdminDep):
+    if user["user_id"] == user_id:
+        raise HTTPException(status_code=400, detail="Cannot deactivate yourself")
+    deactivated = db.app_user_deactivate(user_id)
+    if not deactivated:
+        raise HTTPException(status_code=404, detail="User not found")
+    return {"status": "deactivated", "user": _serialize_user(deactivated)}
 
 
 # ---- document ingestion ----
@@ -176,7 +256,7 @@ async def upload_document(
     doc_type: Optional[str] = Form(None),
     tags: list[str] = Form([]),
     ai_classify: bool = Form(False),
-    _: str = AuthDep,
+    _: dict = WriteDep,
 ):
     raw = await file.read()
     result = _ingest_bytes(file.filename, raw, vendor, doc_type, _parse_tags(tags), ai_classify=ai_classify)
@@ -214,7 +294,7 @@ async def upload_documents_batch(
     doc_type: Optional[str] = Form(None),
     tags: list[str] = Form([]),
     ai_classify: bool = Form(False),
-    _: str = AuthDep,
+    _: dict = WriteDep,
 ):
     if _batch_status["running"]:
         raise HTTPException(status_code=409, detail="A batch upload is already running")
@@ -269,7 +349,7 @@ def get_documents_table(
     q: Optional[str] = None,
     page: int = 1,
     page_size: int = 20,
-    _: str = AuthDep,
+    user: dict = AuthDep,
 ):
     """Server-rendered HTML fragment version of GET /documents, for the Documents tab's HTMX-driven
     table (see ardrag/web/templates/_documents_table.html and the doc-filter-form wiring in
@@ -300,6 +380,7 @@ def get_documents_table(
             "total_pages": total_pages,
             "start": 0 if total == 0 else start_idx + 1,
             "end": min(page * page_size, total),
+            "user_role": user["role"],
         },
     )
 
@@ -320,7 +401,7 @@ def update_document(
     vendor: Optional[str] = Form(None),
     doc_type: Optional[str] = Form(None),
     tags: list[str] = Form(None),
-    _: str = AuthDep,
+    _: dict = Depends(require_permission("settings")),
 ):
     parsed_tags = _parse_tags(tags) if tags is not None else None
     doc = db.update_document_metadata(doc_id, vendor=vendor, doc_type=doc_type, tags=parsed_tags)
@@ -335,7 +416,7 @@ def bulk_update_documents(
     vendor: Optional[str] = Form(None),
     doc_type: Optional[str] = Form(None),
     tags: list[str] = Form(None),
-    _: str = AuthDep,
+    _: dict = Depends(require_permission("settings")),
 ):
     parsed_tags = _parse_tags(tags) if tags is not None else None
     updated = []
@@ -374,7 +455,7 @@ def preview_document(doc_id: int, _: str = AuthDep):
 
 
 @app.post("/documents/{doc_id}/reembed")
-def reembed_document(doc_id: int, chunk_size: int = Form(...), chunk_overlap: int = Form(...), _: str = AuthDep):
+def reembed_document(doc_id: int, chunk_size: int = Form(...), chunk_overlap: int = Form(...), _: dict = Depends(require_permission("reembed"))):
     if chunk_size < 100:
         raise HTTPException(status_code=400, detail="Chunk size must be at least 100 characters")
     if chunk_overlap < 0 or chunk_overlap >= chunk_size:
@@ -394,7 +475,7 @@ def reembed_document(doc_id: int, chunk_size: int = Form(...), chunk_overlap: in
 
 
 @app.delete("/documents/{doc_id}")
-def delete_document(doc_id: int, _: str = AuthDep):
+def delete_document(doc_id: int, _: dict = Depends(require_permission("delete"))):
     doc = db.delete_document(doc_id)
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
@@ -566,7 +647,7 @@ def _embedding_identity(settings: db.Settings) -> tuple:
 
 
 @app.get("/settings")
-def get_settings(_: str = AuthDep):
+def get_settings(_: dict = AuthDep):
     return {
         "current": _serialize_settings(db.get_settings()),
         "available_models": SUPPORTED_EMBEDDING_MODELS,
@@ -588,7 +669,7 @@ def update_settings(
     classify_base_url: Optional[str] = Form(None),
     deepseek_api_key: Optional[str] = Form(None),
     deepseek_model: Optional[str] = Form(None),
-    _: str = AuthDep,
+    _: dict = Depends(require_permission("settings")),
 ):
     old_settings = db.get_settings()
 
@@ -853,7 +934,7 @@ def delete_chat_session(session_id: int, _: str = AuthDep):
 TITLE_MAX_CHARS = 60
 
 
-def _run_chat_turn(session: db.ChatSession, message: str) -> dict:
+def _run_chat_turn(session: db.ChatSession, message: str, doc_ids: Optional[list[int]] = None) -> dict:
     """Persists the user message, runs the RAG answer, and persists+returns the assistant
     message dict — or an error-shaped dict (is_error=True) if the chat call failed, without
     persisting an assistant row for it (a failed turn doesn't leave a phantom assistant message
@@ -863,7 +944,7 @@ def _run_chat_turn(session: db.ChatSession, message: str) -> dict:
     db.chat_message_add(session.id, "user", message)
 
     try:
-        result = chat_mod.answer(message, history)
+        result = chat_mod.answer(message, history, doc_ids=doc_ids)
     except chat_mod.ChatError as e:
         return {"role": "assistant", "content": str(e), "sources": [], "is_error": True}
 
@@ -878,21 +959,32 @@ def _run_chat_turn(session: db.ChatSession, message: str) -> dict:
 
 
 @app.post("/chat/sessions/{session_id}/messages")
-def post_chat_message(session_id: int, message: str = Form(...), _: str = AuthDep):
+def post_chat_message(
+    session_id: int,
+    message: str = Form(...),
+    doc_ids: list[int] = Form([]),
+    _: str = AuthDep,
+):
     session = db.chat_session_get(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Chat session not found")
     message = message.strip()
     if not message:
         raise HTTPException(status_code=400, detail="Message cannot be empty")
-    result = _run_chat_turn(session, message)
+    result = _run_chat_turn(session, message, doc_ids=doc_ids or None)
     if result.get("is_error"):
         raise HTTPException(status_code=400, detail=result["content"])
     return result
 
 
 @app.post("/chat/sessions/{session_id}/messages/html")
-def post_chat_message_html(request: Request, session_id: int, message: str = Form(...), _: str = AuthDep):
+def post_chat_message_html(
+    request: Request,
+    session_id: int,
+    message: str = Form(...),
+    doc_ids: list[int] = Form([]),
+    _: str = AuthDep,
+):
     session = db.chat_session_get(session_id)
     if not session:
         m = {"role": "assistant", "content": "Chat session not found — start a new chat.", "sources": [], "is_error": True}
@@ -900,7 +992,7 @@ def post_chat_message_html(request: Request, session_id: int, message: str = For
     message = message.strip()
     if not message:
         return HTMLResponse("")
-    result = _run_chat_turn(session, message)
+    result = _run_chat_turn(session, message, doc_ids=doc_ids or None)
     return templates.TemplateResponse(request, "_chat_message_single.html", {"m": result})
 
 

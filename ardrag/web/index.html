@@ -516,6 +516,31 @@
     /* iOS Safari auto-zooms on focus if an input's font-size is under 16px */
     input[type="text"], input[type="password"], select { font-size: 16px; }
   }
+
+  /* Role-based visibility — hidden by default, revealed by JS after /api/me resolves.
+     Superadmin sees everything; regular user sees read-only views. */
+  .superadmin-only { display: none; }
+  .write-only { display: none; }
+
+  /* Users tab */
+  #tab-users { max-width: 800px; margin: 0 auto; }
+  #tab-users table { margin-top: 10px; }
+  .users-form { display: flex; gap: 8px; flex-wrap: wrap; align-items: flex-end; margin-top: 12px; }
+  .users-form label { font-size: 0.82rem; font-weight: 500; display: flex; flex-direction: column; gap: 4px; }
+
+  /* Chat document selector */
+  .chat-doc-selector {
+    display: flex; flex-wrap: wrap; gap: 4px; align-items: center; padding: 8px 20px 0;
+    border-top: 1px solid var(--border); flex-shrink: 0;
+  }
+  .chat-doc-selector label { font-size: 0.74rem; color: var(--text-muted); font-weight: 600; margin-right: 4px; }
+  .chat-doc-chip {
+    display: inline-flex; align-items: center; gap: 3px; background: var(--surface-2);
+    border: 1px solid var(--border); border-radius: 12px; padding: 2px 8px; font-size: 0.72rem;
+    cursor: pointer; user-select: none; transition: background 0.12s;
+  }
+  .chat-doc-chip.selected { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); font-weight: 600; }
+  .chat-doc-chip:hover { background: var(--accent-soft); }
 </style>
 </head>
 <body>
@@ -527,8 +552,9 @@
     <nav>
       <button class="tab-btn active" data-tab="chat">AI Chat</button>
       <button class="tab-btn" data-tab="documents">Documents</button>
-      <button class="tab-btn" data-tab="dashboard">Monitoring</button>
-      <button class="tab-btn" data-tab="settings">Settings</button>
+      <button class="tab-btn superadmin-only" data-tab="dashboard">Monitoring</button>
+      <button class="tab-btn superadmin-only" data-tab="settings">Settings</button>
+      <button class="tab-btn superadmin-only" data-tab="users">Users</button>
       <button id="logout-btn" class="secondary">Logout</button>
     </nav>
   </header>
@@ -543,7 +569,7 @@
 
     <main>
       <section class="tab" id="tab-documents">
-        <div class="panel">
+        <div class="panel write-only">
           <form class="upload-form" id="upload-form">
             <input type="text" id="vendor-input" list="vendor-list" placeholder="Vendor (e.g. Maipu)" autocomplete="off" />
             <datalist id="vendor-list"></datalist>
@@ -590,7 +616,7 @@
           </form>
         </div>
 
-        <div class="bulk-bar" id="bulk-bar">
+        <div class="bulk-bar write-only" id="bulk-bar">
           <span id="bulk-count" class="muted">0 selected</span>
           <input type="text" id="bulk-vendor-input" list="vendor-list" placeholder="Set vendor…" autocomplete="off" />
           <input type="text" id="bulk-doctype-input" list="doctype-list" placeholder="Set doc type…" autocomplete="off" />

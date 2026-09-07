@@ -98,6 +98,19 @@ class Settings(SQLModel, table=True):
     mcp_public_url: str = Field(default="")
 
 
+class AppUser(SQLModel, table=True):
+    """Web UI user accounts with role-based access control. The superadmin role has full access;
+    the user role is read-only (view/download documents, browse folders/tags)."""
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    username: str = Field(unique=True, index=True)
+    password_hash: str
+    role: str = Field(default="user")  # "superadmin" | "user"
+    display_name: str = Field(default="")
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    is_active: bool = Field(default=True)
+
+
 class McpUser(SQLModel, table=True):
     """MCP-only login accounts, independent of the web UI's single ADMIN_USER — used for the
     OAuth login form when MCP OAuth access mode is enabled, so MCP access can be granted/revoked
@@ -272,6 +285,20 @@ def _migrate_mcp_settings_columns() -> None:
         conn.commit()
 
 
+def _migrate_appuser_table() -> None:
+    with _engine.connect() as conn:
+        tables = {row[0] for row in conn.execute(text("SELECT name FROM sqlite_master WHERE type='table'"))}
+        if "appuser" not in tables:
+            conn.execute(text(
+                "CREATE TABLE appuser ("
+                "id INTEGER PRIMARY KEY, username VARCHAR UNIQUE, password_hash VARCHAR, "
+                "role VARCHAR DEFAULT 'user', display_name VARCHAR DEFAULT '', "
+                "created_at DATETIME, is_active BOOLEAN DEFAULT 1)"
+            ))
+            conn.execute(text("CREATE INDEX ix_appuser_username ON appuser (username)"))
+        conn.commit()
+
+
 def _migrate_ai_config_columns() -> None:
     with _engine.connect() as conn:
         cols = {row[1] for row in conn.execute(text("PRAGMA table_info(settings)"))}
@@ -303,10 +330,28 @@ def init_db() -> None:
     _migrate_oauth_columns()
     _migrate_mcp_settings_columns()
     _migrate_ai_config_columns()
+    _migrate_appuser_table()
     with Session(_engine) as session:
         if not session.get(Settings, 1):
             session.add(Settings(id=1))
             session.commit()
+    # Auto-create superadmin from env vars if no superadmin exists yet
+    _ensure_superadmin()
+
+
+def _ensure_superadmin() -> None:
+    from ardrag.config import ADMIN_PASSWORD, ADMIN_USER
+    with Session(_engine) as session:
+        existing = session.exec(select(AppUser).where(AppUser.role == "superadmin")).first()
+        if existing:
+            return
+        session.add(AppUser(
+            username=ADMIN_USER,
+            password_hash=_hash_password(ADMIN_PASSWORD),
+            role="superadmin",
+            display_name="Administrator",
+        ))
+        session.commit()
 
 
 def get_document_by_name(name: str) -> Optional[Document]:
@@ -737,6 +782,79 @@ def oauth_delete_refresh_token(token: str) -> None:
         if row:
             session.delete(row)
             session.commit()
+
+
+# ---- AppUser CRUD ----
+
+
+def app_user_create(username: str, password: str, role: str = "user", display_name: str = "") -> AppUser:
+    with Session(_engine) as session:
+        if session.exec(select(AppUser).where(AppUser.username == username)).first():
+            raise ValueError(f"User '{username}' already exists.")
+        user = AppUser(username=username, password_hash=_hash_password(password), role=role, display_name=display_name)
+        session.add(user)
+        session.commit()
+        session.refresh(user)
+        return user
+
+
+def app_user_list() -> list[AppUser]:
+    with Session(_engine) as session:
+        return list(session.exec(select(AppUser).order_by(AppUser.created_at)))
+
+
+def app_user_get(user_id: int) -> Optional[AppUser]:
+    with Session(_engine) as session:
+        return session.get(AppUser, user_id)
+
+
+def app_user_get_by_username(username: str) -> Optional[AppUser]:
+    with Session(_engine) as session:
+        return session.exec(select(AppUser).where(AppUser.username == username)).first()
+
+
+def app_user_verify(username: str, password: str) -> Optional[AppUser]:
+    """Verify credentials and return the user if valid and active, else None."""
+    with Session(_engine) as session:
+        user = session.exec(select(AppUser).where(AppUser.username == username)).first()
+        if not user or not user.is_active:
+            return None
+        salt_hex, _, expected_hex = user.password_hash.partition("$")
+        computed = _hash_password(password, bytes.fromhex(salt_hex))
+        if not secrets.compare_digest(computed, user.password_hash):
+            return None
+        return user
+
+
+def app_user_update(user_id: int, **kwargs) -> Optional[AppUser]:
+    with Session(_engine) as session:
+        user = session.get(AppUser, user_id)
+        if not user:
+            return None
+        if "password" in kwargs and kwargs["password"]:
+            user.password_hash = _hash_password(kwargs["password"])
+        if "role" in kwargs and kwargs["role"]:
+            user.role = kwargs["role"]
+        if "display_name" in kwargs:
+            user.display_name = kwargs["display_name"]
+        if "is_active" in kwargs:
+            user.is_active = kwargs["is_active"]
+        session.add(user)
+        session.commit()
+        session.refresh(user)
+        return user
+
+
+def app_user_deactivate(user_id: int) -> Optional[AppUser]:
+    with Session(_engine) as session:
+        user = session.get(AppUser, user_id)
+        if not user:
+            return None
+        user.is_active = False
+        session.add(user)
+        session.commit()
+        session.refresh(user)
+        return user
 
 
 # ---- MCP-specific user accounts (separate from ADMIN_USER) ----

@@ -40,11 +40,12 @@ def _build_context(sources: list[dict]) -> str:
     return "\n\n".join(blocks)
 
 
-def answer(query: str, history: list[dict], top_k: int = None) -> dict:
+def answer(query: str, history: list[dict], top_k: int = None, doc_ids: list[int] | None = None) -> dict:
     """Runs a hybrid RAG search for `query`, then asks the configured classification-API model
     (Settings > Classification, same OpenAI-compatible client used for document classification) to
     answer grounded in the retrieved chunks. `history` is prior turns as
     [{"role": "user"|"assistant", "content": str}, ...], most recent last.
+    If `doc_ids` is provided, search is scoped to those documents only.
 
     Raises ChatError if no API key is configured or the call fails.
     """
@@ -52,7 +53,7 @@ def answer(query: str, history: list[dict], top_k: int = None) -> dict:
     if not settings.deepseek_api_key:
         raise ChatError("Classification API key is not configured — set it in Settings > AI Configuration first.")
 
-    sources = core.search(query, top_k=top_k or CHAT_TOP_K)
+    sources = core.search(query, top_k=top_k or CHAT_TOP_K, doc_ids=doc_ids)
     context = _build_context(sources)
 
     messages = [{"role": "system", "content": f"{SYSTEM_PROMPT}\n\nContext:\n{context}"}]

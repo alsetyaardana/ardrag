@@ -301,19 +301,24 @@ def search(
     vendor: str = None,
     doc_type: str = None,
     tag: str = None,
+    doc_ids: list[int] = None,
 ) -> list[dict]:
     ensure_collection()
     settings = db.get_settings()
     dense_query = embed_texts([query], settings)[0]
     sparse_query = embed_sparse([query])[0]
 
-    # Vendor/doc_type/tag aren't stored in Qdrant's payload (only doc_name/text/chunk_index are),
-    # so filtering by them means resolving the allowed doc_names from SQLite first, then
+    # Vendor/doc_type/tag/doc_ids aren't stored in Qdrant's payload (only doc_name/text/chunk_index
+    # are), so filtering by them means resolving the allowed doc_names from SQLite first, then
     # over-fetching from Qdrant and filtering down to top_k in Python. This avoids needing a
     # reindex whenever the metadata schema changes.
     allowed_names = None
-    if vendor or doc_type or tag:
-        allowed_names = {d.name for d in db.list_documents(vendor=vendor, doc_type=doc_type, tag=tag)}
+    if doc_ids or vendor or doc_type or tag:
+        docs = db.list_documents(vendor=vendor, doc_type=doc_type, tag=tag)
+        if doc_ids:
+            doc_id_set = set(doc_ids)
+            docs = [d for d in docs if d.id in doc_id_set]
+        allowed_names = {d.name for d in docs}
         if not allowed_names:
             return []
 
