@@ -1616,7 +1616,7 @@
         const me = await res.json();
         if (me.role === "superadmin") {
           document.querySelectorAll(".superadmin-only").forEach(el => {
-            el.style.display = "";
+            el.classList.remove("superadmin-only");
           });
         }
         if (me.role === "user") {
