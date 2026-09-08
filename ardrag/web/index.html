@@ -553,8 +553,8 @@
       <button class="tab-btn active" data-tab="chat">AI Chat</button>
       <button class="tab-btn" data-tab="documents">Documents</button>
       <button class="tab-btn superadmin-only" data-tab="dashboard">Monitoring</button>
-      <button class="tab-btn superadmin-only" data-tab="settings">Settings</button>
       <button class="tab-btn superadmin-only" data-tab="users">Users</button>
+      <button class="tab-btn superadmin-only" data-tab="settings">Settings</button>
       <button id="logout-btn" class="secondary">Logout</button>
     </nav>
   </header>
@@ -1611,12 +1611,15 @@
     // ---- Role-based UI visibility ----
     (async () => {
       try {
-        const res = await fetch("/api/me");
+        const res = await fetch("/api/me", { credentials: "same-origin" });
+        console.log("[role] /api/me status:", res.status);
         if (!res.ok) return;
         const me = await res.json();
+        console.log("[role] user:", me);
         if (me.role === "superadmin") {
           document.querySelectorAll(".superadmin-only").forEach(el => {
             el.classList.remove("superadmin-only");
+            console.log("[role] revealed:", el.textContent.trim());
           });
         }
         if (me.role === "user") {
@@ -1624,7 +1627,7 @@
             el.style.display = "none";
           });
         }
-      } catch (e) { /* not logged in or network error */ }
+      } catch (e) { console.error("[role] error:", e); }
     })();
   </script>
 </body>
