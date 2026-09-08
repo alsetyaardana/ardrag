@@ -811,6 +811,34 @@
           </div>
         </div>
       </section>
+      <section class="tab" id="tab-users">
+        <div class="panel">
+          <h3>User Management</h3>
+          <p class="muted">Manage web UI accounts. Superadmin has full access; user role can only view and download documents.</p>
+          <div class="users-form">
+            <label>Username <input type="text" id="new-user-username" placeholder="username" /></label>
+            <label>Password <input type="password" id="new-user-password" placeholder="password" /></label>
+            <label>Display Name <input type="text" id="new-user-display" placeholder="John Doe" /></label>
+            <label>Role
+              <select id="new-user-role">
+                <option value="user">User</option>
+                <option value="superadmin">Superadmin</option>
+              </select>
+            </label>
+            <button id="add-user-btn" type="button">Add User</button>
+          </div>
+          <table style="width:100%; border-collapse:collapse; font-size:0.85rem; margin-top:12px;">
+            <thead>
+              <tr style="text-align:left; border-bottom:1px solid var(--border);">
+                <th>Username</th><th>Display Name</th><th>Role</th><th>Status</th><th>Created</th><th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="users-table-wrap" hx-get="/admin/users/html" hx-trigger="load, refresh-users" hx-swap="innerHTML">
+              <tr><td class="muted" colspan="6">Loading users…</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
     </main>
   </div>
 
@@ -1629,6 +1657,53 @@
         }
       } catch (e) { console.error("[role] error:", e); }
     })();
+
+    // ---- User management ----
+    document.getElementById('add-user-btn')?.addEventListener('click', async () => {
+      const username = document.getElementById('new-user-username').value.trim();
+      const password = document.getElementById('new-user-password').value;
+      const display_name = document.getElementById('new-user-display').value.trim();
+      const role = document.getElementById('new-user-role').value;
+      if (!username || !password) { alert('Username and password required'); return; }
+      const fd = new FormData();
+      fd.append('username', username);
+      fd.append('password', password);
+      fd.append('display_name', display_name);
+      fd.append('role', role);
+      const res = await api('/admin/users', { method: 'POST', body: fd });
+      if (res.ok) {
+        document.getElementById('new-user-username').value = '';
+        document.getElementById('new-user-password').value = '';
+        document.getElementById('new-user-display').value = '';
+        htmx.trigger('#users-table-wrap', 'refresh-users');
+      } else {
+        const err = await res.json();
+        alert(err.detail || 'Failed to add user');
+      }
+    });
+
+    document.getElementById('users-table-wrap')?.addEventListener('click', async (e) => {
+      const editBtn = e.target.closest('.edit-user-btn');
+      if (editBtn) {
+        const id = editBtn.dataset.id;
+        const newRole = prompt('New role (superadmin/user):', editBtn.dataset.role);
+        if (!newRole || !['superadmin', 'user'].includes(newRole)) return;
+        const newDisplay = prompt('Display name:', editBtn.dataset.displayName || '');
+        if (newDisplay === null) return;
+        const fd = new FormData();
+        fd.append('role', newRole);
+        fd.append('display_name', newDisplay);
+        await api(`/admin/users/${id}`, { method: 'PATCH', body: fd });
+        htmx.trigger('#users-table-wrap', 'refresh-users');
+        return;
+      }
+      const deactivateBtn = e.target.closest('.deactivate-user-btn');
+      if (deactivateBtn) {
+        if (!confirm('Deactivate this user?')) return;
+        await api(`/admin/users/${deactivateBtn.dataset.id}`, { method: 'DELETE' });
+        htmx.trigger('#users-table-wrap', 'refresh-users');
+      }
+    });
   </script>
 </body>
 </html>
