@@ -1607,6 +1607,25 @@
     loadFolders();
     checkOngoingUpload();
     initChatTab();
+
+    // ---- Role-based UI visibility ----
+    (async () => {
+      try {
+        const res = await fetch("/api/me");
+        if (!res.ok) return;
+        const me = await res.json();
+        if (me.role === "superadmin") {
+          document.querySelectorAll(".superadmin-only").forEach(el => {
+            el.style.display = "";
+          });
+        }
+        if (me.role === "user") {
+          document.querySelectorAll(".write-only").forEach(el => {
+            el.style.display = "none";
+          });
+        }
+      } catch (e) { /* not logged in or network error */ }
+    })();
   </script>
 </body>
 </html>
